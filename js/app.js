@@ -10,7 +10,16 @@
     load() {
       try {
         const saved = JSON.parse(localStorage.getItem(DB_KEY));
-        if (saved?.library && saved?.collections) return saved;
+        if (saved?.library && saved?.collections) {
+          const knownIds = new Set(saved.library.map(item => item.id));
+          const newDefaults = structuredClone(window.DEFAULT_LIBRARY).filter(item => !knownIds.has(item.id));
+          if (newDefaults.length) {
+            const merged = { ...saved, library: [...saved.library, ...newDefaults] };
+            this.save(merged);
+            return merged;
+          }
+          return saved;
+        }
       } catch {}
       const fresh = {
         library: structuredClone(window.DEFAULT_LIBRARY),
@@ -516,7 +525,7 @@
 
     // A URL direta (fileUrl) tem prioridade. Se não houver, usamos a 'telegramUrl'
     // somente se ela NÃO for um link real do Telegram (ou seja, é um caminho de arquivo).
-    const resolvedUrl = item.fileUrl || (!isTelegramLink(item.telegramUrl) ? item.telegramUrl : "");
+    const resolvedUrl = item.fileUrl || (!isTelegramLink(item.telegramUrl) ? item.telegramUrl : "") || "";
 
     if (!resolvedUrl) {
       toast(item.telegramUrl ? "Links do Telegram não são suportados sem um servidor de ponte." : "Esta edição não tem uma URL de arquivo direto.");
@@ -663,6 +672,15 @@
       body.innerHTML = `<img class="reader-image" src="${escapeHTML(resolvedUrl)}" alt="">`;
       controls.innerHTML = `<span class="reader-page">Imagem</span>`;
       saveReadingProgress(item, 1, 1);
+    } else if (item.seriesUrl && !item.fileUrl && !item.telegramUrl) {
+      body.innerHTML = `
+        <div class="empty" style="margin:auto;max-width:650px">
+          <h3>Catálogo externo</h3>
+          <p>Esta entrada possui metadados, mas ainda não possui o link individual do arquivo.</p>
+          <button class="btn btn-primary" data-open-series>Abrir página da série</button>
+        </div>`;
+      $(`[data-open-series]`, body).onclick = () => window.open(item.seriesUrl, "_blank", "noopener");
+      controls.innerHTML = `<span class="reader-page">LINK EXTERNO</span>`;
     } else {
       const title = "Formato não suportado no leitor";
       const message = `O formato "${escapeHTML(format.toUpperCase())}" não pode ser lido diretamente no navegador. Use o botão "Abrir arquivo" para abri-lo em uma nova aba.`;
