@@ -484,6 +484,25 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 600px) {
   .topbar { padding: 0 14px; gap: 10px; }
   .reader-btn { display: none; }
+  .reader-top {
+    height: auto; min-height: 58px; max-height: 112px; flex-wrap: wrap;
+    align-content: center; overflow-x: auto; overflow-y: hidden;
+    padding: 7px 9px; gap: 6px; -webkit-overflow-scrolling: touch;
+  }
+  .reader-top .reader-title { flex: 1 1 120px; min-width: 110px; font-size: 12px; }
+  .reader-top .small-btn, .reader-top select { flex: 0 0 auto; white-space: nowrap; font-size: 10px; padding: 6px 7px; }
+  .reader-top [data-toggle-cover],
+  .reader-top [data-toggle-grayscale],
+  .reader-top [data-browse-character],
+  .reader-top [data-browse-publisher] { display: none; }
+  .reader-body { touch-action: pan-y; }
+  .reader-image { max-width: 100%; max-height: calc(100vh - 150px); }
+  .reader-controls { min-height: 50px; height: auto; padding: 7px 10px; gap: 8px; }
+  .reader-controls button { min-width: 42px; }
+  .reader-double-page { padding: 10px 5px; gap: 2px; }
+  .reader-double-page .reader-canvas, .reader-double-page .reader-image { max-width: 49vw; }
+  .comment-form { flex-direction: column; }
+  .comment-form .small-btn { align-self: flex-end; }
   .hero { min-height: 520px; padding: 70px 20px 45px; }
   .content { padding: 25px 15px 50px; }
   .rail { grid-auto-columns: 42vw; }
