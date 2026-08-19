@@ -39,6 +39,7 @@
     profile: null,
     favoriteIds: new Set(),
     readingProgress: new Map(),
+    achievementChecks: new Set(),
     achievements: [],
     localBoxFiles: [],
     localBoxVisible: false
@@ -95,7 +96,7 @@
       render();
       return;
     }
-    const profile = await sb.from("profiles").select("id, username, avatar_url, title").ilike("username", username).maybeSingle();
+    const profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color").ilike("username", username).maybeSingle();
     if (profile.error || !profile.data) {
       state.publicProfile = { error: "Perfil não encontrado.", username };
       render();
@@ -117,7 +118,7 @@
     await sb?.auth.signOut();
     clearLocalBox();
     state.localBoxVisible = false;
-    state.session = null; state.profile = null; state.favoriteIds = new Set(); state.readingProgress = new Map(); state.achievements = [];
+    state.session = null; state.profile = null; state.favoriteIds = new Set(); state.readingProgress = new Map(); state.achievements = []; state.achievementChecks = new Set();
     state.section = "home"; render(); toast("Você saiu da conta.");
   }
 
@@ -156,12 +157,30 @@
     } else {
       await sb.from("favorites").insert({ user_id: state.session.user.id, item_id: itemId });
       state.favoriteIds.add(itemId);
+      awardAchievement("first_favorite");
     }
     render();
   }
 
   function openAuthPage() { state.authMode = "login"; setSection("login"); }
   function openSignupPage() { state.authMode = "signup"; setSection("signup"); }
+
+  function safeTitleColor(value) {
+    return /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : "#ffd45c";
+  }
+
+  function trophyRoom(achievements = []) {
+    return `<div class="trophy-room"><div class="trophy-room-title">Sala de troféus</div><div class="achievement-list">${achievements.length ? achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("") : '<span class="trophy-empty">Nenhuma insígnia conquistada ainda.</span>'}</div></div>`;
+  }
+
+  function awardAchievement(key) {
+    if (!state.session || !sb || state.achievementChecks.has(key)) return;
+    state.achievementChecks.add(key);
+    sb.rpc("award_achievement", { p_key: key }).then(result => {
+      if (result.error) console.warn("Não foi possível atualizar a conquista:", result.error.message);
+      else loadAccount();
+    });
+  }
 
   function progressFor(item, progressMap = state.readingProgress) {
     return progressMap?.get(item?.id) || null;
@@ -189,6 +208,8 @@
     state.readingProgress.set(item.id, row);
     $("[data-toggle-read]")?.replaceChildren(document.createTextNode(completed ? "Desmarcar como lida" : "Marcar como lida"));
     updateCompletionCards(item, completed);
+    awardAchievement("first_read");
+    if (completed) { awardAchievement("first_completed"); awardAchievement("five_completed"); }
     const result = await sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
     if (result.error) console.warn("Não foi possível salvar o progresso de leitura:", result.error.message);
   }
@@ -433,7 +454,7 @@
       button.disabled = true;
       const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
       if (result.error) toast(result.error.message);
-      else { form.reset(); await refresh(); }
+      else { awardAchievement("first_comment"); form.reset(); await refresh(); }
       button.disabled = false;
     });
   }
@@ -468,9 +489,9 @@
 
   function openAchievementAdmin() {
     const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
-    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Conquistas e títulos</h2><div class="section-subtitle">Conceda uma conquista e um título visível no perfil</div></div><button class="small-btn" data-close>Fechar</button></div><form id="achievement-form"><div class="form-grid"><div class="field full"><label>@ do usuário</label><input name="username" required placeholder="usuario"></div><div class="field"><label>Título</label><input name="title" placeholder="Leitor veterano"></div><div class="field"><label>Nome da conquista</label><input name="name" required placeholder="Primeira leitura"></div><div class="field"><label>Ícone</label><input name="icon" value="★" maxlength="3"></div><div class="field full"><label>Descrição</label><textarea name="description"></textarea></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Conceder</button></div></form></div>`;
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Distribuir título</h2><div class="section-subtitle">Títulos são frases personalizadas; as insígnias são conquistadas automaticamente.</div></div><button class="small-btn" data-close>Fechar</button></div><form id="achievement-form"><div class="form-grid"><div class="field full"><label>@ do usuário</label><input name="username" required placeholder="usuario"></div><div class="field full"><label>Frase do título</label><input name="title" placeholder="Leitor veterano"></div><div class="field"><label>Cor de fundo</label><input name="titleColor" type="color" value="#ffd45c"></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar título</button></div></form></div>`;
     $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
-    $("#achievement-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); const profile = await sb.from("profiles").select("id").eq("username", username).single(); if (profile.error) return toast("Usuário não encontrado."); if (fd.get("title")) await sb.from("profiles").update({ title: String(fd.get("title")).trim() }).eq("id", profile.data.id); const achievement = await sb.from("achievements").insert({ name: String(fd.get("name")).trim(), description: String(fd.get("description") || "").trim(), icon: String(fd.get("icon") || "★") }).select().single(); if (achievement.error && achievement.error.code !== "23505") return toast(achievement.error.message); const achievementId = achievement.data?.id || (await sb.from("achievements").select("id").eq("name", String(fd.get("name")).trim()).single()).data?.id; await sb.from("user_achievements").upsert({ user_id: profile.data.id, achievement_id: achievementId, awarded_by: state.session.user.id }); overlay.remove(); toast("Conquista concedida."); };
+    $("#achievement-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); const title = String(fd.get("title") || "").trim(); const title_color = safeTitleColor(fd.get("titleColor")); const profile = await sb.from("profiles").select("id").eq("username", username).single(); if (profile.error) return toast("Usuário não encontrado."); const update = await sb.from("profiles").update({ title: title || null, title_color }).eq("id", profile.data.id); if (update.error) return toast(update.error.message); if (state.profile?.id === profile.data.id) state.profile = { ...state.profile, title, title_color }; overlay.remove(); render(); toast("Título atualizado."); };
   }
 
   function openReader(item, options = {}) {
@@ -2089,7 +2110,7 @@
   function renderShelfPage() {
     if (!state.session) return renderLoginPage();
     const items = state.db.library.filter(item => state.favoriteIds.has(item.id));
-    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title">${escapeHTML(state.profile.title)}</div>` : ""}<div class="achievement-list">${state.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div></div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
+    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
   }
 
   function renderPublicProfilePage() {
@@ -2103,8 +2124,8 @@
         ${profile.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}
         <div>
           <div class="eyebrow">@${escapeHTML(profile.username)}</div>
-          ${profile.title ? `<div class="profile-title">${escapeHTML(profile.title)}</div>` : '<div class="section-subtitle">Perfil público</div>'}
-          ${publicState.achievements.length ? `<div class="achievement-list">${publicState.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div>` : ''}
+          ${profile.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(profile.title_color)}">${escapeHTML(profile.title)}</div>` : '<div class="section-subtitle">Perfil público</div>'}
+          ${trophyRoom(publicState.achievements)}
         </div>
       </div>
       <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div>
@@ -2583,7 +2604,7 @@
         <div class="section-head"><div><h2>Administração</h2><div class="section-subtitle">Catálogo de obras, edições e coleções</div></div><button class="small-btn" data-close>Fechar</button></div>
         <div class="notice"><b>Oneshots e séries</b><br>Deixe o campo Série vazio para abrir uma edição diretamente. Use o mesmo nome de série em várias edições para criar a seleção de volumes.</div>
         <div class="admin-actions" style="margin-bottom:15px">
-          <button class="btn btn-danger" data-new>+ Nova edição</button><button class="small-btn" data-new-collection>+ Criar coleção</button><button class="small-btn" data-achievements>Conquistas</button>
+          <button class="btn btn-danger" data-new>+ Nova edição</button><button class="small-btn" data-new-collection>+ Criar coleção</button><button class="small-btn" data-achievements>Títulos</button>
           <button class="small-btn" data-export>Exportar</button><button class="small-btn" data-import>Importar</button><button class="small-btn" data-reset>Restaurar exemplo</button>
         </div>
         <table class="admin-table"><thead><tr><th>Série / edição</th><th>Editora</th><th>Personagem</th><th>Ano</th><th>Ações</th></tr></thead><tbody>

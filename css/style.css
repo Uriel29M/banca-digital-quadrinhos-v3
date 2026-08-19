@@ -463,7 +463,10 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .profile-header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
 .profile-avatar { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--surface); border: 1px solid var(--line); }
 .profile-avatar-empty { display: grid; place-items: center; color: var(--accent); font-size: 23px; }
-.profile-title { color: #ffd45c; font-size: 13px; margin-top: 4px; }
+.profile-title { display: inline-block; color: #17171b; background: var(--title-bg, #ffd45c); border-radius: 5px; padding: 4px 8px; font-size: 13px; font-weight: 800; margin-top: 4px; }
+.trophy-room { margin-top: 12px; padding: 10px 12px; border: 1px solid #3a343e; border-radius: 9px; background: linear-gradient(145deg, #211c24, #151519); }
+.trophy-room-title { color: #ffd45c; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 8px; }
+.trophy-empty { color: var(--muted); font-size: 11px; }
 .achievement-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .achievement-list span { padding: 4px 7px; background: #25252b; border-radius: 5px; color: #d7d7dc; font-size: 11px; }
 .profile-actions { display: flex; gap: 7px; margin-left: auto; }
