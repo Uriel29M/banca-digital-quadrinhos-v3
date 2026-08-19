@@ -419,9 +419,20 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .comment-author:hover { color: var(--accent); text-decoration: underline; }
 .comment-title { color: #ffd45c; font-size: 10px; }
 .comment p { margin: 7px 0 0; color: #ccc; line-height: 1.5; white-space: pre-wrap; }
-.comment-form { display: flex; gap: 9px; align-items: flex-end; }
-.comment-form textarea { flex: 1; min-height: 42px; resize: vertical; }
-.comment-form .small-btn { padding: 9px 12px; }
+.comment-form { display: flex; gap: 10px; align-items: stretch; padding-top: 4px; }
+.comment-form textarea {
+  flex: 1; min-height: 44px; max-height: 120px; resize: vertical;
+  box-sizing: border-box; padding: 11px 12px; background: #1a1a1f;
+  border: 1px solid #383840; border-radius: 9px; color: #f5f5f7;
+  font: inherit; line-height: 1.45; outline: none; transition: border-color .2s, box-shadow .2s;
+}
+.comment-form textarea::placeholder { color: #777780; }
+.comment-form textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(235, 76, 92, .14); }
+.comment-form .small-btn {
+  align-self: flex-end; min-height: 44px; padding: 9px 14px;
+  border-color: #4a3035; background: #251b1f; color: #f4c7cb;
+}
+.comment-form .small-btn:hover { border-color: var(--accent); background: var(--accent); color: white; }
 .profile-header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
 .profile-avatar { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--surface); border: 1px solid var(--line); }
 .profile-avatar-empty { display: grid; place-items: center; color: var(--accent); font-size: 23px; }
