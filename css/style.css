@@ -410,7 +410,12 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .reader-comments summary::before { content: "＋"; display: inline-block; width: 20px; color: var(--accent); font-size: 14px; }
 .reader-comments[open] summary { color: #eee; border-bottom: 1px solid #29292f; }
 .reader-comments[open] summary::before { content: "−"; }
-.comments-content { padding: 12px 0 14px; }
+.comments-content { display: flex; flex-direction: column; padding: 12px 0 14px; }
+.comments-content .comment-form {
+  order: -1; position: sticky; top: 0; z-index: 2;
+  padding: 0 0 12px; background: #15151a;
+}
+.comments-content .comments-list { order: 1; }
 .reader-comments h3 { margin: 0; }
 .comments-list { display: grid; gap: 9px; margin: 0 0 13px; }
 .comment { padding: 11px 12px; background: #1b1b20; border: 1px solid #29292f; border-radius: 9px; font-size: 12px; }
