@@ -89,6 +89,11 @@ Deno.serve(async request => {
     if (length > MAX_FILE_BYTES) return responseBody("Arquivo excede o limite permitido.", 413);
     if (!upstream.response.body) return responseBody("O MediaFire não retornou conteúdo.", 502);
 
+    const contentType = (upstream.response.headers.get("content-type") || "").toLowerCase();
+    if (contentType.includes("text/html") || contentType.startsWith("text/plain")) {
+      return responseBody("O link do MediaFire expirou ou retornou uma página em vez do arquivo. Use a URL permanente /file/... .", 502);
+    }
+
     const headers = new Headers(corsHeaders);
     headers.set("Content-Type", upstream.response.headers.get("content-type") || "application/octet-stream");
     const contentDisposition = upstream.response.headers.get("content-disposition");
