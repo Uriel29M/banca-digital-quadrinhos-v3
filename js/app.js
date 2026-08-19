@@ -27,6 +27,7 @@
   const state = {
     db: DataStore.load(),
     section: "home",
+    authMode: "login",
     search: "",
     entityFilter: null,
     editingId: null,
@@ -85,7 +86,8 @@
     render();
   }
 
-  function openAuthPage() { setSection("login"); }
+  function openAuthPage() { state.authMode = "login"; setSection("login"); }
+  function openSignupPage() { state.authMode = "signup"; setSection("signup"); }
 
   const coverMemoryCache = new Map();
   const coverLoading = new Map();
@@ -166,6 +168,56 @@
     el.textContent = message;
     $("#toast-root").appendChild(el);
     setTimeout(() => el.remove(), 2800);
+  }
+
+  function openPasswordRecoveryModal() {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `
+      <div class="modal auth-modal">
+        <div class="section-head">
+          <div>
+            <h2>Recuperar acesso</h2>
+            <div class="section-subtitle">Informe o email associado à sua conta para receber o link de recuperação.</div>
+          </div>
+          <button class="small-btn" type="button" data-close>Fechar</button>
+        </div>
+        <form id="password-recovery-form">
+          <div class="field">
+            <label for="recovery-email">Email da conta</label>
+            <input id="recovery-email" name="email" type="email" required placeholder="voce@email.com" autocomplete="email">
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="small-btn" data-close>Cancelar</button>
+            <button class="btn btn-danger" type="submit">Enviar link</button>
+          </div>
+          <div class="auth-message" id="recovery-message"></div>
+        </form>
+      </div>`;
+    $("#modal-root").appendChild(overlay);
+    $$("[data-close]", overlay).forEach(button => button.onclick = () => overlay.remove());
+    $("#recovery-email", overlay)?.focus();
+    $("#password-recovery-form", overlay).addEventListener("submit", async event => {
+      event.preventDefault();
+      const email = String(new FormData(event.currentTarget).get("email") || "").trim();
+      const message = $("#recovery-message", overlay);
+      const submit = $('button[type="submit"]', event.currentTarget);
+      submit.disabled = true;
+      if (!sb) {
+        message.textContent = "A autenticação ainda não foi configurada.";
+        submit.disabled = false;
+        return;
+      }
+      const redirectTo = `${window.location.origin}${window.location.pathname}`;
+      const result = await sb.auth.resetPasswordForEmail(email, { redirectTo });
+      if (result.error) {
+        message.textContent = result.error.message;
+        submit.disabled = false;
+        return;
+      }
+      overlay.remove();
+      toast("Enviamos o link de recuperação para o email informado.");
+    });
   }
 
   function weightedRandom(items) {
@@ -249,7 +301,23 @@
     const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
     overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Meu perfil</h2><div class="section-subtitle">Personalize seu @ e sua foto</div></div><button class="small-btn" data-close>Fechar</button></div><form id="profile-form"><div class="form-grid"><div class="field full"><label>@usuário</label><input name="username" pattern="[A-Za-z0-9_]{3,24}" required value="${escapeHTML(state.profile?.username || "")}"></div><div class="field full"><label>Foto de perfil</label><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar perfil</button></div></form></div>`;
     $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    const profileForm = $("#profile-form", overlay);
+    const emailField = document.createElement("div");
+    const currentEmail = state.session.user.email || "";
+    const hasRecoveryEmail = currentEmail && !currentEmail.endsWith("@login.banca-digital.local");
+    emailField.className = "field full profile-email-field";
+    emailField.innerHTML = `<label>Email de recuperação <span class="field-optional">(opcional)</span></label><input name="email" type="email" placeholder="voce@email.com" autocomplete="email" value="${hasRecoveryEmail ? escapeHTML(currentEmail) : ""}"><small class="format-hint">Adicionar um email permite recuperar a conta e usá-lo para entrar depois.</small>`;
+    $(".form-grid", profileForm).appendChild(emailField);
     $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const update = await sb.from("profiles").update({ username, avatar_url }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url }; overlay.remove(); render(); toast("Perfil atualizado."); };
+    $("#profile-form", overlay).addEventListener("submit", async event => {
+      const email = String(new FormData(event.currentTarget).get("email") || "").trim().toLowerCase();
+      if (!email || email === currentEmail) return;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast("Informe um email válido.");
+      const result = await sb.auth.updateUser({ email });
+      if (result.error) return toast(result.error.message);
+      state.session.user.email = email;
+      toast("Email atualizado. Verifique sua caixa de entrada para confirmar o endereço.");
+    });
   }
 
   function openAchievementAdmin() {
@@ -1789,7 +1857,11 @@
   }
 
   function renderLoginPage() {
-    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu usuário ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>Usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com" autocomplete="username"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6" autocomplete="current-password"></div><div class="auth-actions"><button type="submit" class="btn btn-danger" data-auth-mode="login">Entrar</button><button type="submit" class="small-btn" data-auth-mode="signup">Criar conta</button></div><button class="link-btn" type="button" data-forgot-password>Esqueci minha senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
+    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu usuário ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>Usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com" autocomplete="username"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6" autocomplete="current-password"></div><div class="auth-actions"><button type="submit" class="btn btn-danger" data-auth-mode="login">Entrar</button><button type="button" class="small-btn" data-auth-switch="signup">Criar conta</button></div><button class="link-btn" type="button" data-forgot-password>Esqueci minha senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
+  }
+
+  function renderSignupPage() {
+    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Criar conta</h1><p class="section-subtitle">Crie seu acesso para salvar edições e montar sua estante.</p><form id="auth-form"><div class="field"><label>Usuário</label><input name="username" required pattern="[A-Za-z0-9_]{3,24}" placeholder="seu_usuario" autocomplete="username"></div><div class="field"><label>Email <span class="field-optional">(opcional)</span></label><input name="email" type="email" placeholder="voce@email.com" autocomplete="email"></div><div class="notice auth-notice">Sem email, não será possível recuperar sua conta caso você perca a senha. Contas gratuitas são excluídas após 30 dias de inatividade. Contas premium e admin são mantidas.</div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6" autocomplete="new-password"></div><div class="auth-actions"><button type="submit" class="btn btn-danger" data-auth-mode="signup">Criar conta</button><button type="button" class="small-btn" data-auth-switch="login">Já tenho uma conta</button></div><div class="auth-message" id="auth-message"></div></form></div></div>`;
   }
 
   function renderPasswordResetPage() {
@@ -1863,6 +1935,7 @@
     else if (state.section === "search") main.innerHTML = renderSearch();
     else if (state.section === "entity") main.innerHTML = renderEntityPage();
     else if (state.section === "login") main.innerHTML = renderLoginPage();
+    else if (state.section === "signup") main.innerHTML = renderSignupPage();
     else if (state.section === "shelf") main.innerHTML = renderShelfPage();
     else if (state.section === "password-reset") main.innerHTML = renderPasswordResetPage();
     bind();
@@ -1914,11 +1987,13 @@
       if (!sb) { message.textContent = "A autenticação ainda não foi configurada."; return; }
       if (!identifier.includes("@") && !/^[a-z0-9_]{3,24}$/.test(username)) { message.textContent = "Use de 3 a 24 caracteres: letras, números ou _."; return; }
       const mode = event.submitter?.dataset.authMode || event.currentTarget.dataset.authMode || "login";
+      const providedEmail = String(form.get("email") || "").trim().toLowerCase();
+      if (mode === "signup" && providedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(providedEmail)) { message.textContent = "Informe um email válido ou deixe o campo em branco."; return; }
       const signupUsername = identifier.includes("@")
         ? cleanUsername(identifier.split("@")[0]).replace(/[^a-z0-9_]/g, "_").slice(0, 24)
         : username;
       if (mode === "signup" && !/^[a-z0-9_]{3,24}$/.test(signupUsername)) { message.textContent = "Não foi possível definir um usuário a partir deste email. Use um usuário de 3 a 24 caracteres."; return; }
-      const email = identifier.includes("@") ? identifier.toLowerCase() : authEmail(username);
+      const email = mode === "signup" ? (providedEmail || authEmail(username)) : (identifier.includes("@") ? identifier.toLowerCase() : authEmail(username));
       const result = mode === "signup"
         ? await sb.auth.signUp({ email, password, options: { data: { username: signupUsername } } })
         : await sb.auth.signInWithPassword({ email, password });
@@ -1930,13 +2005,11 @@
     $$('[data-auth-mode]').forEach(button => button.addEventListener("click", () => {
       $("#auth-form").dataset.authMode = button.dataset.authMode;
     }));
-    $("[data-forgot-password]")?.addEventListener("click", async () => {
-      const email = prompt("Informe o endereço de email associado à sua conta:");
-      if (!email || !sb) return;
-      const redirectTo = `${window.location.origin}${window.location.pathname}`;
-      const result = await sb.auth.resetPasswordForEmail(email.trim(), { redirectTo });
-      toast(result.error ? result.error.message : "Enviamos o link de recuperação.");
-    });
+    $$("[data-auth-switch]").forEach(button => button.addEventListener("click", () => {
+      if (button.dataset.authSwitch === "signup") openSignupPage();
+      else openAuthPage();
+    }));
+    $("[data-forgot-password]")?.addEventListener("click", openPasswordRecoveryModal);
     $("#password-reset-form")?.addEventListener("submit", async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
