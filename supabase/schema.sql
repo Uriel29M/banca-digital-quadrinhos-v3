@@ -47,7 +47,8 @@ create table if not exists public.achievements (
   icon text default '★'
 );
 alter table public.achievements add column if not exists achievement_key text;
-create unique index if not exists achievements_key_unique on public.achievements(achievement_key) where achievement_key is not null;
+drop index if exists public.achievements_key_unique;
+create unique index if not exists achievements_key_unique on public.achievements(achievement_key);
 
 create table if not exists public.user_achievements (
   user_id uuid not null references public.profiles(id) on delete cascade,
