@@ -4,6 +4,7 @@
   // --- Inicialização de Bibliotecas ---
   // --- Fim da Inicialização ---
   const DB_KEY = "bancaDigitalDB_v1";
+  const DEFAULT_AVATAR_URL = "https://i.pinimg.com/736x/be/17/10/be1710edaace144c17bdaf6deb2d2cc8.jpg";
 
   const DataStore = {
     load() {
@@ -57,6 +58,11 @@
     return String(value || "").replace(/^@/, "").trim().toLowerCase();
   }
 
+  function avatarMarkup(profile, className = "profile-avatar") {
+    const planClass = profile?.plan === "admin" ? "avatar-admin" : profile?.plan === "premium" ? "avatar-premium" : "";
+    return `<img class="${className} ${planClass}" src="${escapeHTML(profile?.avatar_url || DEFAULT_AVATAR_URL)}" alt="Foto de ${escapeHTML(profile?.username || "usuário")}">`;
+  }
+
   function appAssetUrl(path) {
     return new URL(String(path).replace(/^\/+/, ""), document.baseURI).href;
   }
@@ -96,9 +102,9 @@
       render();
       return;
     }
-    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color").ilike("username", username).maybeSingle();
+    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan").ilike("username", username).maybeSingle();
     if (profile.error) {
-      profile = await sb.from("profiles").select("id, username, avatar_url, title").ilike("username", username).maybeSingle();
+      profile = await sb.from("profiles").select("id, username, avatar_url, title, plan").ilike("username", username).maybeSingle();
     }
     if (profile.error || !profile.data) {
       state.publicProfile = { error: "Perfil não encontrado.", username };
@@ -435,14 +441,15 @@
     overlay.appendChild(panel);
     const list = $(".comments-list", panel);
     const refresh = async () => {
-      const result = await sb.from("comments").select("id, body, created_at, profiles(username, avatar_url, title)").eq("item_id", item.id).order("created_at", { ascending: false });
+      const result = await sb.from("comments").select("id, body, created_at, profiles(username, avatar_url, title, plan)").eq("item_id", item.id).order("created_at", { ascending: false });
       if (result.error) {
         list.innerHTML = '<span class="section-subtitle">Não foi possível carregar os comentários.</span>';
         return;
       }
       list.innerHTML = (result.data || []).map(comment => {
         const username = cleanUsername(comment.profiles?.username || "usuário");
-        return `<article class="comment"><div class="comment-author-row"><a class="comment-author" href="${publicProfileHref(username)}" target="_blank" rel="noopener">@${escapeHTML(username)}</a>${comment.profiles?.title ? `<span class="comment-title">${escapeHTML(comment.profiles.title)}</span>` : ""}</div><p>${escapeHTML(comment.body)}</p></article>`;
+        const profile = { ...(comment.profiles || {}), username };
+        return `<article class="comment"><div class="comment-author-row">${avatarMarkup(profile, "comment-avatar")}<div class="comment-author-info"><a class="comment-author" href="${publicProfileHref(username)}" target="_blank" rel="noopener">@${escapeHTML(username)}</a>${profile.title ? `<span class="comment-title">${escapeHTML(profile.title)}</span>` : ""}</div></div><p>${escapeHTML(comment.body)}</p></article>`;
       }).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
     };
     await refresh();
@@ -671,7 +678,7 @@
   function extension(url) {
     const clean = String(url || "").split("?")[0].split("#")[0];
     const filename = clean.split(/[\\/]/).pop();
-    return /^[^.]+\.[a-z0-9]{1,8}$/i.test(filename) ? filename.split(".").pop().toLowerCase() : "";
+    return /^.+\.[a-z0-9]{1,8}$/i.test(filename) ? filename.split(".").pop().toLowerCase() : "";
   }
 
   async function renderPDFReader(item, url, body, controls, overlay, skipCover = false, resumePage = 1, onPageChange = () => {}) {
@@ -2123,7 +2130,7 @@
   function renderShelfPage() {
     if (!state.session) return renderLoginPage();
     const items = state.db.library.filter(item => state.favoriteIds.has(item.id));
-    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
+    return `<div class="content"><div class="profile-header">${avatarMarkup(state.profile)}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
   }
 
   function renderPublicProfilePage() {
@@ -2134,7 +2141,7 @@
     const items = state.db.library.filter(item => publicState.favoriteIds.has(item.id));
     return `<div class="content public-profile-page">
       <div class="profile-header">
-        ${profile.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}
+        ${avatarMarkup(profile)}
         <div>
           <div class="eyebrow">@${escapeHTML(profile.username)}</div>
           ${profile.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(profile.title_color)}">${escapeHTML(profile.title)}</div>` : '<div class="section-subtitle">Perfil público</div>'}
@@ -2226,6 +2233,13 @@
   function bind() {
     const canManage = ["premium", "admin"].includes(state.profile?.plan);
     const isAdmin = state.profile?.plan === "admin";
+    const headerAvatar = $(".avatar");
+    if (headerAvatar) {
+      headerAvatar.innerHTML = avatarMarkup(state.profile, "top-avatar-img");
+      headerAvatar.title = state.session ? "Abrir minha estante" : "Entrar ou abrir minha estante";
+      headerAvatar.classList.toggle("avatar-admin", state.profile?.plan === "admin");
+      headerAvatar.classList.toggle("avatar-premium", state.profile?.plan === "premium");
+    }
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
     $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
     $$('.local-box-nav').forEach(button => { button.style.display = state.session && state.localBoxVisible ? "" : "none"; });
