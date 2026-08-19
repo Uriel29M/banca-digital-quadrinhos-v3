@@ -434,6 +434,7 @@
         </button>
         ${showModeSelector ? `<button class="small-btn" data-toggle-cover>${skipCover ? 'Incluir capa' : 'Ignorar capa'}</button>` : ''}
         <button class="small-btn" data-toggle-grayscale>${readerGrayscale ? 'Cor normal' : 'Preto e branco'}</button>
+        <button class="small-btn" data-reader-zoom>Zoom</button>
         ${item.character ? `<button class="small-btn" data-browse-character>Ver personagem</button>` : ''}
         ${item.publisher ? `<button class="small-btn" data-browse-publisher>Ver editora</button>` : ''}
         <button class="small-btn" data-open-external>Abrir arquivo</button>
@@ -460,6 +461,48 @@
 
     const body = $("#reader-body", overlay);
     const controls = $("#reader-controls", overlay);
+    overlay._readerNavigate = direction => {
+      const button = direction > 0 ? $("[data-next]", controls) : $("[data-prev]", controls);
+      if (button && !button.disabled) button.click();
+    };
+    let suppressReaderClick = false;
+    const toggleReaderChrome = () => overlay.classList.toggle("reader-immersive");
+    $("[data-reader-zoom]", overlay).onclick = () => {
+      overlay.classList.toggle("reader-zoom-fit");
+      overlay.classList.add("reader-immersive");
+      overlay._readerZoom?.();
+    };
+    body.addEventListener("click", event => {
+      if (suppressReaderClick || event.target.closest("button, a, select, textarea")) {
+        suppressReaderClick = false;
+        return;
+      }
+      toggleReaderChrome();
+    });
+    let pointerStart = null;
+    body.addEventListener("pointerdown", event => {
+      pointerStart = { x: event.clientX, y: event.clientY };
+    });
+    body.addEventListener("pointerup", event => {
+      if (!pointerStart) return;
+      const dx = event.clientX - pointerStart.x;
+      const dy = event.clientY - pointerStart.y;
+      pointerStart = null;
+      if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+        suppressReaderClick = true;
+        overlay._readerNavigate?.(dx < 0 ? 1 : -1);
+      }
+    });
+    const onReaderKeydown = event => {
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
+      const direction = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+      if (!direction) return;
+      event.preventDefault();
+      overlay._readerNavigate?.(direction);
+    };
+    document.addEventListener("keydown", onReaderKeydown);
+    $("[data-close-reader]", overlay).addEventListener("click", () => document.removeEventListener("keydown", onReaderKeydown), { once: true });
     attachComments(item, overlay);
     body.classList.toggle("reader-grayscale", readerGrayscale);
     const seriesObserver = new MutationObserver(() => appendSeriesNavigation(item, controls, overlay));
