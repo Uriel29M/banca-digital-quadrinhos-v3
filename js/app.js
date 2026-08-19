@@ -2110,6 +2110,20 @@
     return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu usuário ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>Usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com" autocomplete="username"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6" autocomplete="current-password"></div><div class="auth-actions"><button type="submit" class="btn btn-danger" data-auth-mode="login">Entrar</button><button type="button" class="small-btn" data-auth-switch="signup">Criar conta</button></div><button class="link-btn" type="button" data-forgot-password>Esqueci minha senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
   }
 
+  function openAccountPlanAdmin() {
+    const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Alterar tipo de conta</h2><div class="section-subtitle">Mude uma conta entre gratuita e premium.</div></div><button class="small-btn" data-close>Fechar</button></div><form id="account-plan-form"><div class="form-grid"><div class="field full"><label>@ do usuário</label><input name="username" required placeholder="usuario"></div><div class="field full"><label>Novo tipo de conta</label><select name="plan"><option value="free">Free</option><option value="premium">Premium</option></select></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar alteração</button></div></form></div>`;
+    $("#modal-root").appendChild(overlay);
+    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $("#account-plan-form", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const result = await sb.rpc("set_user_plan", { p_username: cleanUsername(form.get("username")), p_plan: form.get("plan") });
+      if (result.error) return toast(result.error.message);
+      overlay.remove(); toast("Tipo de conta atualizado.");
+    };
+  }
+
   function renderSignupPage() {
     return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Criar conta</h1><p class="section-subtitle">Crie seu acesso para salvar edições e montar sua estante.</p><form id="auth-form"><div class="field"><label>Usuário</label><input name="username" required pattern="[A-Za-z0-9_]{3,24}" placeholder="seu_usuario" autocomplete="username"></div><div class="field"><label>Email <span class="field-optional">(opcional)</span></label><input name="email" type="email" placeholder="voce@email.com" autocomplete="email"></div><div class="notice auth-notice">Sem email, não será possível recuperar sua conta caso você perca a senha. Contas gratuitas são excluídas após 30 dias de inatividade. Contas premium e admin são mantidas.</div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6" autocomplete="new-password"></div><div class="auth-actions"><button type="submit" class="btn btn-danger" data-auth-mode="signup">Criar conta</button><button type="button" class="small-btn" data-auth-switch="login">Já tenho uma conta</button></div><div class="auth-message" id="auth-message"></div></form></div></div>`;
   }
@@ -2632,7 +2646,7 @@
         <div class="section-head"><div><h2>Administração</h2><div class="section-subtitle">Catálogo de obras, edições e coleções</div></div><button class="small-btn" data-close>Fechar</button></div>
         <div class="notice"><b>Oneshots e séries</b><br>Deixe o campo Série vazio para abrir uma edição diretamente. Use o mesmo nome de série em várias edições para criar a seleção de volumes.</div>
         <div class="admin-actions" style="margin-bottom:15px">
-          <button class="btn btn-danger" data-new>+ Nova edição</button><button class="small-btn" data-new-collection>+ Criar coleção</button><button class="small-btn" data-achievements>Títulos</button>
+          <button class="btn btn-danger" data-new>+ Nova edição</button><button class="small-btn" data-new-collection>+ Criar coleção</button><button class="small-btn" data-achievements>Títulos</button><button class="small-btn" data-account-plan>Tipo de conta</button>
           <button class="small-btn" data-export>Exportar</button><button class="small-btn" data-import>Importar</button><button class="small-btn" data-reset>Restaurar exemplo</button>
         </div>
         <table class="admin-table"><thead><tr><th>Série / edição</th><th>Editora</th><th>Personagem</th><th>Ano</th><th>Ações</th></tr></thead><tbody>
@@ -2647,6 +2661,7 @@
     $("[data-new]", overlay).onclick = () => { overlay.remove(); openEditForm(); };
     $("[data-new-collection]", overlay).onclick = () => { overlay.remove(); openCollectionForm(); };
     $("[data-achievements]", overlay).onclick = () => { overlay.remove(); openAchievementAdmin(); };
+    $("[data-account-plan]", overlay).onclick = () => { overlay.remove(); openAccountPlanAdmin(); };
     $("[data-export]", overlay).onclick = exportDB; $("[data-import]", overlay).onclick = importDB;
     $("[data-reset]", overlay).onclick = () => { state.db = { library: structuredClone(window.DEFAULT_LIBRARY), collections: structuredClone(window.DEFAULT_COLLECTIONS), submissions: [] }; save(); overlay.remove(); render(); };
     $$('[data-edit]', overlay).forEach(button => button.onclick = () => { overlay.remove(); openEditForm(button.dataset.edit); });

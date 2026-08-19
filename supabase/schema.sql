@@ -158,3 +158,14 @@ begin
 end;
 $$;
 grant execute on function public.award_achievement(text) to authenticated;
+
+create or replace function public.set_user_plan(p_username text, p_plan text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception 'Apenas administradores podem alterar planos'; end if;
+  if p_plan not in ('free', 'premium') then raise exception 'Plano inválido'; end if;
+  update public.profiles set plan = p_plan where lower(username) = lower(trim(p_username));
+  if not found then raise exception 'Usuário não encontrado'; end if;
+end;
+$$;
+grant execute on function public.set_user_plan(text, text) to authenticated;
