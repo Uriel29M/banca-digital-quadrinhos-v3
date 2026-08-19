@@ -318,10 +318,15 @@
     content.className = "comments-content";
     while (panel.firstChild) content.appendChild(panel.firstChild);
     panel.append(summary, content);
+    $(".comment-form button", panel)?.setAttribute("type", "submit");
     overlay.appendChild(panel);
     const list = $(".comments-list", panel);
     const refresh = async () => {
       const result = await sb.from("comments").select("id, body, created_at, profiles(username, avatar_url, title)").eq("item_id", item.id).order("created_at", { ascending: false });
+      if (result.error) {
+        list.innerHTML = '<span class="section-subtitle">Não foi possível carregar os comentários.</span>';
+        return;
+      }
       list.innerHTML = (result.data || []).map(comment => `<article class="comment"><b>@${escapeHTML(comment.profiles?.username || "usuário")}</b>${comment.profiles?.title ? `<span class="comment-title">${escapeHTML(comment.profiles.title)}</span>` : ""}<p>${escapeHTML(comment.body)}</p></article>`).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
     };
     await refresh();
@@ -330,7 +335,8 @@
       event.stopImmediatePropagation();
       const form = event.currentTarget;
       const body = String(new FormData(form).get("body") || "").trim();
-      const button = $("button[type=\"submit\"]", form);
+      const button = $("button", form);
+      if (!state.session?.user?.id) { toast("Entre na sua conta para comentar."); return; }
       if (!body) return;
       button.disabled = true;
       const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
@@ -2020,7 +2026,9 @@
 
   function bind() {
     const canManage = ["premium", "admin"].includes(state.profile?.plan);
+    const isAdmin = state.profile?.plan === "admin";
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
+    $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
       const item = state.db.library.find(x => x.id === el.dataset.open);
@@ -2040,7 +2048,7 @@
       if (a === "open-auth") state.session ? setSection("shelf") : openAuthPage();
       if (a === "logout") signOut();
       if (a === "profile") openProfileSettings();
-      if (a === "submit") openSubmission();
+      if (a === "submit") { if (isAdmin) openSubmission(); else toast("O envio de quadrinhos é exclusivo para administradores."); }
     }));
     $$("[data-collection]").forEach(el => el.addEventListener("click", () => openCollection(el.dataset.collection)));
     $("#search-input")?.addEventListener("keydown", e => {
