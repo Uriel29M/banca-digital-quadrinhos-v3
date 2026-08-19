@@ -33,7 +33,59 @@
     // Reading mode for PDF, CBZ, and CBR readers
     readingMode: localStorage.getItem("readingMode") || "single-page", // 'single-page', 'double-page', or 'continuous-scroll'
     readingDirection: localStorage.getItem("readingDirection") || "western" // 'western' or 'eastern'
+    ,session: null,
+    profile: null,
+    favoriteIds: new Set(),
+    achievements: []
   };
+
+  const sb = window.supabase?.createClient && window.BANCA_SUPABASE_URL
+    ? window.supabase.createClient(window.BANCA_SUPABASE_URL, window.BANCA_SUPABASE_KEY)
+    : null;
+
+  function authEmail(username) {
+    return `${String(username).replace(/^@/, '').toLowerCase()}@login.banca-digital.local`;
+  }
+
+  function cleanUsername(value) {
+    return String(value || "").replace(/^@/, "").trim().toLowerCase();
+  }
+
+  async function loadAccount() {
+    if (!sb) return;
+    const { data: { session } } = await sb.auth.getSession();
+    state.session = session;
+    if (session?.user) {
+      const profile = await sb.from("profiles").select("*").eq("id", session.user.id).single();
+      state.profile = profile.data;
+      const favorites = await sb.from("favorites").select("item_id").eq("user_id", session.user.id);
+      state.favoriteIds = new Set((favorites.data || []).map(row => row.item_id));
+      const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", session.user.id);
+      state.achievements = (achievements.data || []).map(row => row.achievements).filter(Boolean);
+      await sb.rpc("touch_profile");
+    }
+    render();
+  }
+
+  async function signOut() {
+    await sb?.auth.signOut();
+    state.session = null; state.profile = null; state.favoriteIds = new Set(); state.achievements = [];
+    state.section = "home"; render(); toast("Você saiu da conta.");
+  }
+
+  async function toggleFavorite(itemId) {
+    if (!state.session) return openAuthPage();
+    if (state.favoriteIds.has(itemId)) {
+      await sb.from("favorites").delete().eq("user_id", state.session.user.id).eq("item_id", itemId);
+      state.favoriteIds.delete(itemId);
+    } else {
+      await sb.from("favorites").insert({ user_id: state.session.user.id, item_id: itemId });
+      state.favoriteIds.add(itemId);
+    }
+    render();
+  }
+
+  function openAuthPage() { setSection("login"); }
 
   const coverMemoryCache = new Map();
   const coverLoading = new Map();
@@ -177,6 +229,36 @@
     setSection("entity");
   }
 
+  async function attachComments(item, overlay) {
+    if (!sb) return;
+    const panel = document.createElement("section");
+    panel.className = "reader-comments";
+    panel.innerHTML = `<div class="section-head"><h3>Comentários</h3></div><div class="comments-list"><span class="section-subtitle">Carregando...</span></div>${state.session ? '<form class="comment-form"><textarea name="body" maxlength="1000" required placeholder="Escreva um comentário..."></textarea><button class="small-btn">Comentar</button></form>' : '<p class="section-subtitle">Entre para comentar.</p>'}`;
+    overlay.appendChild(panel);
+    const list = $(".comments-list", panel);
+    const refresh = async () => {
+      const result = await sb.from("comments").select("id, body, created_at, profiles(username, avatar_url, title)").eq("item_id", item.id).order("created_at", { ascending: false });
+      list.innerHTML = (result.data || []).map(comment => `<article class="comment"><b>@${escapeHTML(comment.profiles?.username || "usuário")}</b>${comment.profiles?.title ? `<span class="comment-title">${escapeHTML(comment.profiles.title)}</span>` : ""}<p>${escapeHTML(comment.body)}</p></article>`).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
+    };
+    await refresh();
+    $(".comment-form", panel)?.addEventListener("submit", async event => { event.preventDefault(); const body = String(new FormData(event.currentTarget).get("body") || "").trim(); if (!body) return; await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body }); event.currentTarget.reset(); await refresh(); });
+  }
+
+  function openProfileSettings() {
+    if (!state.session) return openAuthPage();
+    const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Meu perfil</h2><div class="section-subtitle">Personalize seu @ e sua foto</div></div><button class="small-btn" data-close>Fechar</button></div><form id="profile-form"><div class="form-grid"><div class="field full"><label>@usuário</label><input name="username" pattern="[A-Za-z0-9_]{3,24}" required value="${escapeHTML(state.profile?.username || "")}"></div><div class="field full"><label>Foto de perfil</label><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar perfil</button></div></form></div>`;
+    $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const update = await sb.from("profiles").update({ username, avatar_url }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url }; overlay.remove(); render(); toast("Perfil atualizado."); };
+  }
+
+  function openAchievementAdmin() {
+    const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Conquistas e títulos</h2><div class="section-subtitle">Conceda uma conquista e um título visível no perfil</div></div><button class="small-btn" data-close>Fechar</button></div><form id="achievement-form"><div class="form-grid"><div class="field full"><label>@ do usuário</label><input name="username" required placeholder="usuario"></div><div class="field"><label>Título</label><input name="title" placeholder="Leitor veterano"></div><div class="field"><label>Nome da conquista</label><input name="name" required placeholder="Primeira leitura"></div><div class="field"><label>Ícone</label><input name="icon" value="★" maxlength="3"></div><div class="field full"><label>Descrição</label><textarea name="description"></textarea></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Conceder</button></div></form></div>`;
+    $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $("#achievement-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); const profile = await sb.from("profiles").select("id").eq("username", username).single(); if (profile.error) return toast("Usuário não encontrado."); if (fd.get("title")) await sb.from("profiles").update({ title: String(fd.get("title")).trim() }).eq("id", profile.data.id); const achievement = await sb.from("achievements").insert({ name: String(fd.get("name")).trim(), description: String(fd.get("description") || "").trim(), icon: String(fd.get("icon") || "★") }).select().single(); if (achievement.error && achievement.error.code !== "23505") return toast(achievement.error.message); const achievementId = achievement.data?.id || (await sb.from("achievements").select("id").eq("name", String(fd.get("name")).trim()).single()).data?.id; await sb.from("user_achievements").upsert({ user_id: profile.data.id, achievement_id: achievementId, awarded_by: state.session.user.id }); overlay.remove(); toast("Conquista concedida."); };
+  }
+
   function openReader(item, options = {}) {
     if (!item) return;
 
@@ -245,6 +327,7 @@
 
     const body = $("#reader-body", overlay);
     const controls = $("#reader-controls", overlay);
+    attachComments(item, overlay);
     body.classList.toggle("reader-grayscale", readerGrayscale);
     const seriesObserver = new MutationObserver(() => appendSeriesNavigation(item, controls, overlay));
     overlay._seriesObserver = seriesObserver;
@@ -1622,6 +1705,7 @@
       <article class="card" data-open="${escapeHTML(item.id)}">
         <div class="cover" data-cover-id="${escapeHTML(item.id)}" style="background-image:url('${escapeHTML(coverFor(item))}')">
           <span class="cover-number">${escapeHTML(item.issue || "")}</span>
+          <button class="card-favorite ${state.favoriteIds.has(item.id) ? 'is-favorite' : ''}" data-favorite="${escapeHTML(item.id)}" title="Salvar na estante">★</button>
         </div>
         <div class="card-body">
           <div class="card-title">${escapeHTML(item.seriesTitle || item.title)}</div>
@@ -1704,6 +1788,16 @@
     return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) relacionadas a ${title.toLowerCase()}</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div><section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
   }
 
+  function renderLoginPage() {
+    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu @ e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>@usuário</label><input name="username" required pattern="[A-Za-z0-9_]{3,24}" placeholder="seu_usuario"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6"></div><div class="auth-actions"><button class="btn btn-danger" data-auth-mode="login">Entrar</button><button class="small-btn" type="button" data-auth-mode="signup">Criar conta</button></div><div class="auth-message" id="auth-message"></div></form></div></div>`;
+  }
+
+  function renderShelfPage() {
+    if (!state.session) return renderLoginPage();
+    const items = state.db.library.filter(item => state.favoriteIds.has(item.id));
+    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title">${escapeHTML(state.profile.title)}</div>` : ""}<div class="achievement-list">${state.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div></div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div></div><div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
+  }
+
   function renderCatalog(type = null) {
     const items = type ? state.db.library.filter(x => x.type === type) : state.db.library;
     return `
@@ -1764,6 +1858,8 @@
     else if (state.section === "collections") main.innerHTML = renderCollections();
     else if (state.section === "search") main.innerHTML = renderSearch();
     else if (state.section === "entity") main.innerHTML = renderEntityPage();
+    else if (state.section === "login") main.innerHTML = renderLoginPage();
+    else if (state.section === "shelf") main.innerHTML = renderShelfPage();
     bind();
     hydrateHomeCovers();
   }
@@ -1776,6 +1872,9 @@
   }
 
   function bind() {
+    const canManage = ["premium", "admin"].includes(state.profile?.plan);
+    $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
+    $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
       const item = state.db.library.find(x => x.id === el.dataset.open);
       openItem(item);
@@ -1790,12 +1889,32 @@
       if (a === "random") openItem(weightedRandom(uniqueCatalogItems(state.db.library)));
       if (a === "focus-search") { setSection("search"); setTimeout(() => $("#search-input")?.focus(), 30); }
       if (a === "do-search") { state.search = $("#search-input")?.value || ""; render(); $("#search-input")?.focus(); }
-      if (a === "open-admin") openAdmin();
+      if (a === "open-admin") { if (canManage) openAdmin(); else toast("A administração é exclusiva para contas premium."); }
+      if (a === "open-auth") state.session ? setSection("shelf") : openAuthPage();
+      if (a === "logout") signOut();
+      if (a === "profile") openProfileSettings();
       if (a === "submit") openSubmission();
     }));
     $$("[data-collection]").forEach(el => el.addEventListener("click", () => openCollection(el.dataset.collection)));
     $("#search-input")?.addEventListener("keydown", e => {
       if (e.key === "Enter") { state.search = e.target.value; render(); $("#search-input")?.focus(); }
+    });
+    $("#auth-form")?.addEventListener("submit", async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const username = cleanUsername(form.get("username"));
+      const password = String(form.get("password") || "");
+      const message = $("#auth-message");
+      if (!sb) { message.textContent = "A autenticação ainda não foi configurada."; return; }
+      if (!/^[a-z0-9_]{3,24}$/.test(username)) { message.textContent = "Use de 3 a 24 caracteres: letras, números ou _."; return; }
+      const mode = event.submitter?.dataset.authMode || "login";
+      const result = mode === "signup"
+        ? await sb.auth.signUp({ email: authEmail(username), password, options: { data: { username } } })
+        : await sb.auth.signInWithPassword({ email: authEmail(username), password });
+      if (result.error) { message.textContent = result.error.message; return; }
+      if (mode === "signup" && !result.data.session) { message.textContent = "Conta criada. Desative a confirmação de email no Supabase para entrar sem email."; return; }
+      await loadAccount();
+      setSection("shelf");
     });
   }
 
@@ -2087,7 +2206,7 @@
         <div class="section-head"><div><h2>Administração</h2><div class="section-subtitle">Catálogo de obras, edições e coleções</div></div><button class="small-btn" data-close>Fechar</button></div>
         <div class="notice"><b>Oneshots e séries</b><br>Deixe o campo Série vazio para abrir uma edição diretamente. Use o mesmo nome de série em várias edições para criar a seleção de volumes.</div>
         <div class="admin-actions" style="margin-bottom:15px">
-          <button class="btn btn-danger" data-new>+ Nova edição</button><button class="small-btn" data-new-collection>+ Criar coleção</button>
+          <button class="btn btn-danger" data-new>+ Nova edição</button><button class="small-btn" data-new-collection>+ Criar coleção</button><button class="small-btn" data-achievements>Conquistas</button>
           <button class="small-btn" data-export>Exportar</button><button class="small-btn" data-import>Importar</button><button class="small-btn" data-reset>Restaurar exemplo</button>
         </div>
         <table class="admin-table"><thead><tr><th>Série / edição</th><th>Editora</th><th>Personagem</th><th>Ano</th><th>Ações</th></tr></thead><tbody>
@@ -2101,6 +2220,7 @@
     $("[data-close]", overlay).onclick = closeAdmin;
     $("[data-new]", overlay).onclick = () => { overlay.remove(); openEditForm(); };
     $("[data-new-collection]", overlay).onclick = () => { overlay.remove(); openCollectionForm(); };
+    $("[data-achievements]", overlay).onclick = () => { overlay.remove(); openAchievementAdmin(); };
     $("[data-export]", overlay).onclick = exportDB; $("[data-import]", overlay).onclick = importDB;
     $("[data-reset]", overlay).onclick = () => { if (confirm("Restaurar o catálogo de exemplo?")) { state.db = { library: structuredClone(window.DEFAULT_LIBRARY), collections: structuredClone(window.DEFAULT_COLLECTIONS), submissions: [] }; save(); overlay.remove(); render(); } };
     $$('[data-edit]', overlay).forEach(button => button.onclick = () => { overlay.remove(); openEditForm(button.dataset.edit); });
@@ -2152,4 +2272,5 @@
 
   window.BancaDigital = { state, openReader, openAdmin };
   render();
+  loadAccount().catch(error => console.warn("Supabase indisponível:", error));
 })();

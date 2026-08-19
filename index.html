@@ -24,12 +24,13 @@
         <button data-section="manga" class="nav-link">Mangás</button>
         <button data-section="collections" class="nav-link">Coleções</button>
         <button data-section="search" class="nav-link">Pesquisar</button>
+        <button data-section="shelf" class="nav-link">Minha estante</button>
       </nav>
 
       <div class="top-actions">
         <button class="icon-btn" data-action="focus-search" title="Pesquisar">⌕</button>
         <button class="reader-btn" data-action="random">🎲 Aleatório</button>
-        <button class="avatar" data-action="open-admin" title="Administração">A</button>
+        <button class="avatar" data-action="open-auth" title="Entrar ou abrir minha estante">@</button>
       </div>
     </header>
 
@@ -61,6 +62,8 @@
   </script>
   <!-- JSZip para CBZ -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase.js"></script>
   <script src="js/data.js"></script>
   <script src="js/app.js"></script>
 </body>

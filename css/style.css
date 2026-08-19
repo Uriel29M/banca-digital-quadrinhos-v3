@@ -388,6 +388,27 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .admin-collection-list > div { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: var(--surface); border-radius: 8px; }
 .admin-collection-list span { color: var(--muted); font-size: 12px; margin-right: auto; }
 .series-modal { max-width: 980px; }
+.auth-page { min-height: 55vh; display: grid; place-items: center; }
+.auth-card { width: min(100%, 430px); padding: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.auth-actions { display: flex; gap: 8px; margin-top: 14px; }
+.auth-message { min-height: 20px; margin-top: 12px; color: #ff9b9b; font-size: 12px; }
+.card-favorite { position: absolute; right: 9px; top: 9px; border: 0; border-radius: 50%; width: 30px; height: 30px; background: rgba(0,0,0,.72); color: #aaa; cursor: pointer; z-index: 2; }
+.card-favorite.is-favorite { color: #ffd45c; }
+.reader-comments { max-height: 230px; overflow-y: auto; padding: 12px 18px; background: #111114; border-top: 1px solid #29292f; }
+.reader-comments h3 { margin: 0; }
+.comments-list { display: grid; gap: 8px; margin: 8px 0; }
+.comment { padding: 8px 10px; background: #1b1b20; border-radius: 7px; font-size: 12px; }
+.comment-title { margin-left: 6px; color: var(--muted); font-size: 10px; }
+.comment p { margin: 4px 0 0; color: #ccc; white-space: pre-wrap; }
+.comment-form { display: flex; gap: 8px; }
+.comment-form textarea { flex: 1; min-height: 40px; resize: vertical; }
+.profile-header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+.profile-avatar { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--surface); border: 1px solid var(--line); }
+.profile-avatar-empty { display: grid; place-items: center; color: var(--accent); font-size: 23px; }
+.profile-title { color: #ffd45c; font-size: 13px; margin-top: 4px; }
+.achievement-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.achievement-list span { padding: 4px 7px; background: #25252b; border-radius: 5px; color: #d7d7dc; font-size: 11px; }
+.profile-actions { display: flex; gap: 7px; margin-left: auto; }
 .small-btn {
   border: 1px solid #36363d; background: #202025; color: white;
   border-radius: 6px; padding: 6px 8px; font-size: 11px;
