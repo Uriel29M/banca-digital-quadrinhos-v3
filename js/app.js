@@ -55,6 +55,8 @@
     localBoxVisible: false
   };
 
+  let activeReaderCleanup = null;
+
   const sb = window.supabase?.createClient && window.BANCA_SUPABASE_URL
     ? window.supabase.createClient(window.BANCA_SUPABASE_URL, window.BANCA_SUPABASE_KEY)
     : null;
@@ -240,10 +242,8 @@
     updateCompletionCards(item, row.completed);
     const result = sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
     result.then(response => { if (response.error) console.warn("Não foi possível atualizar o status de leitura:", response.error.message); });
-    return row.completed;
   }
 
-  const coverMemoryCache = new Map();
   const coverLoading = new Map();
   const coverAbortControllers = new Map();
 
@@ -306,7 +306,6 @@
   function getReaderSpreadIndexes(totalPages, spread, skipCover) {
     return getReaderSpreadPages(totalPages, spread, skipCover).map(page => page - 1);
   }
-
 
   function formatType(type) {
     return type === "manga" ? "Mangá" : "Quadrinho";
@@ -516,11 +515,13 @@
   function openReader(item, options = {}) {
     if (!item) return;
 
+    activeReaderCleanup?.();
+    activeReaderCleanup = null;
+
     if (!item.local) {
       item.clicks = (Number(item.clicks) || 0) + 1;
       save();
     }
-
     const isTelegramLink = (url) => /^https?:\/\/(www\.)?t(elegram)?\.me\//.test(url || "");
 
     // A URL direta (fileUrl) tem prioridade. Se não houver, usamos a 'telegramUrl'
@@ -574,10 +575,14 @@
     `;
     document.body.appendChild(overlay);
 
-    $("[data-close-reader]", overlay).onclick = () => {
+    const closeReaderButton = $("[data-close-reader]", overlay);
+    const cleanupReader = () => {
+      if (activeReaderCleanup === cleanupReader) activeReaderCleanup = null;
       overlay.remove();
       if (options.localObjectUrl) URL.revokeObjectURL(options.localObjectUrl);
     };
+    activeReaderCleanup = () => closeReaderButton.click();
+    closeReaderButton.onclick = cleanupReader;
     $("[data-open-external]", overlay).onclick = () => window.open(resolvedUrl, "_blank", "noopener");
     $("[data-toggle-cover]", overlay)?.addEventListener("click", () => {
       overlay.remove();
@@ -1618,6 +1623,7 @@
         await draw();
         $("[data-close-reader]", overlay).addEventListener('click', () => {
           if (objectUrl) URL.revokeObjectURL(objectUrl);
+          archive?.close?.();
         }, { once: true });
       } else if (currentReadingMode === 'double-page') {
         let spread = Math.max(0, Math.floor((resumePage - 1) / 2));
@@ -1686,48 +1692,75 @@
           for (const u of spreadUrls) {
             URL.revokeObjectURL(u);
           }
+          archive?.close?.();
         }, { once: true });
       } else if (currentReadingMode === 'continuous-scroll') {
         const pageContainer = document.createElement("div");
         pageContainer.className = "image-continuous-scroll-container";
         body.replaceChildren(pageContainer);
 
-        objectUrls = []; // Use a simple array for cleanup
+        objectUrls = [];
         const pageElements = [];
+        const pageStates = new Map();
 
-        status("Extraindo todas as páginas do CBR...");
-        const pageData = await Promise.all(imageFiles.map(async (file) => {
-          const extracted = await withTimeout(file.extract(), 120000, "A extração de uma página demorou demais.");
-          const blob = extracted instanceof Blob ? extracted : new Blob([extracted], { type: "image/jpeg" });
-          const url = URL.createObjectURL(blob);
-          objectUrls.push(url);
-          return { src: url };
-        }));
-
-        body.replaceChildren(pageContainer); // Clear status message
-
-        pageData.forEach((data, index) => {
+        imageFiles.forEach((file, index) => {
           if (skipCover && index === 0) return;
           const pageNum = index + 1;
           const pageWrapper = document.createElement("div");
           pageWrapper.className = "image-page-wrapper";
+          pageWrapper.style.minHeight = "65vh";
+          pageWrapper.style.width = "min(90%, 900px)";
           pageWrapper.dataset.pageNum = pageNum;
           const img = document.createElement("img");
           img.className = "reader-image";
           img.alt = `Página ${pageNum}`;
-          img.src = data.src;
           pageWrapper.appendChild(img);
           pageContainer.appendChild(pageWrapper);
-          pageElements.push(pageWrapper);
+          pageElements.push({ file, pageNum, wrapper: pageWrapper, img });
+          pageStates.set(index, { url: null, loading: null });
         });
+
+        const loadPage = async page => {
+          const pageState = pageStates.get(imageFiles.indexOf(page.file));
+          if (!pageState || pageState.url || pageState.loading) return;
+          pageState.loading = (async () => {
+            const extracted = await withTimeout(page.file.extract(), 120000, "A extração de uma página demorou demais.");
+            const blob = extracted instanceof Blob ? extracted : new Blob([extracted], { type: "image/jpeg" });
+            pageState.url = URL.createObjectURL(blob);
+            page.img.src = pageState.url;
+            objectUrls.push(pageState.url);
+          })().catch(error => console.error("[CBR] Falha ao extrair página", page.pageNum, error)).finally(() => {
+            pageState.loading = null;
+          });
+          await pageState.loading;
+        };
+
+        const releasePage = page => {
+          const pageState = pageStates.get(imageFiles.indexOf(page.file));
+          if (!pageState?.url) return;
+          URL.revokeObjectURL(pageState.url);
+          objectUrls = objectUrls.filter(url => url !== pageState.url);
+          pageState.url = null;
+          page.img.removeAttribute("src");
+        };
+
+        const observer = new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            const page = pageElements.find(candidate => candidate.wrapper === entry.target);
+            if (!page) return;
+            if (entry.isIntersecting) loadPage(page);
+            else releasePage(page);
+          });
+        }, { root: pageContainer, rootMargin: "150% 0px" });
+        pageElements.forEach(page => observer.observe(page.wrapper));
 
         let currentPageIndex = 0;
         const updateControls = () => {
-          const visiblePage = pageElements.find(el => {
-            const rect = el.getBoundingClientRect();
+          const visiblePage = pageElements.find(page => {
+            const rect = page.wrapper.getBoundingClientRect();
             return rect.top >= 0 && rect.top < window.innerHeight / 2;
-          }) || pageElements.find(el => {
-            const rect = el.getBoundingClientRect();
+          }) || pageElements.find(page => {
+            const rect = page.wrapper.getBoundingClientRect();
             return rect.bottom > 0 && rect.top < window.innerHeight;
           }) || pageElements[0];
 
@@ -1739,23 +1772,27 @@
           currentPageIndex = pageElements.indexOf(visiblePage);
           controls.innerHTML = `
             <button data-prev ${currentPageIndex <= 0 ? "disabled" : ""}>↑</button>
-            <span class="reader-page">${visiblePage.dataset.pageNum} / ${imageFiles.length}</span>
-            <button data-next ${currentPageIndex >= imageFiles.length - 1 ? "disabled" : ""}>↓</button>
+            <span class="reader-page">${visiblePage.pageNum} / ${imageFiles.length}</span>
+            <button data-next ${currentPageIndex >= pageElements.length - 1 ? "disabled" : ""}>↓</button>
           `;
           const prevBtn = $("[data-prev]", controls);
           const nextBtn = $("[data-next]", controls);
-          prevBtn?.addEventListener("click", () => pageElements[Math.max(0, currentPageIndex - 1)].scrollIntoView({ behavior: 'smooth', block: 'start' }));
-          nextBtn?.addEventListener("click", () => pageElements[Math.min(pageElements.length - 1, currentPageIndex + 1)].scrollIntoView({ behavior: 'smooth', block: 'start' }));
-          onPageChange(item, Number(visiblePage.dataset.pageNum), imageFiles.length);
-          pageElements.find(el => Number(el.dataset.pageNum) === resumePage)?.scrollIntoView({ block: 'start' });
+          prevBtn?.addEventListener("click", () => pageElements[Math.max(0, currentPageIndex - 1)].wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+          nextBtn?.addEventListener("click", () => pageElements[Math.min(pageElements.length - 1, currentPageIndex + 1)].wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+          onPageChange(item, visiblePage.pageNum, imageFiles.length);
         };
 
         pageContainer.addEventListener('scroll', updateControls, { passive: true });
+        loadPage(pageElements[0]);
         updateControls();
+        pageElements.find(page => page.pageNum === resumePage)?.wrapper.scrollIntoView({ block: 'start' });
 
         $("[data-close-reader]", overlay).addEventListener('click', () => {
+          observer.disconnect();
           pageContainer.removeEventListener('scroll', updateControls);
-          if (objectUrls) for (const url of objectUrls) URL.revokeObjectURL(url);
+          for (const url of objectUrls) URL.revokeObjectURL(url);
+          objectUrls = null;
+          archive?.close?.();
         }, { once: true });
       }
 
@@ -1786,6 +1823,10 @@
       );
 
     } catch (err) {
+      archive?.close?.();
+      if (objectUrls) {
+        for (const url of objectUrls) URL.revokeObjectURL(url);
+      }
 
       console.error(
         "[CBR] ERRO NO LEITOR:",
