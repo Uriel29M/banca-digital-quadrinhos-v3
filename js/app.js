@@ -1986,7 +1986,7 @@
           </div>
           ${actionText ? `<button class="link-btn" data-section="search">${escapeHTML(actionText)} →</button>` : ""}
         </div>
-        <div class="rail">${uniqueCatalogItems(items).map(card).join("")}</div>
+        <div class="rail">${uniqueCatalogItems(items).map(item => card(item)).join("")}</div>
       </section>`;
   }
 
@@ -2045,7 +2045,7 @@
     const filter = state.entityFilter || { kind: "character", value: "" };
     const items = state.db.library.filter(item => String(item[filter.kind] || "").toLowerCase() === String(filter.value || "").toLowerCase());
     const title = filter.kind === "publisher" ? "Editora" : "Personagem";
-    return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) relacionadas a ${title.toLowerCase()}</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div><section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
+    return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) relacionadas a ${title.toLowerCase()}</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div><section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
   }
 
   function renderLoginPage() {
@@ -2073,7 +2073,7 @@
   function renderShelfPage() {
     if (!state.session) return renderLoginPage();
     const items = state.db.library.filter(item => state.favoriteIds.has(item.id));
-    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title">${escapeHTML(state.profile.title)}</div>` : ""}<div class="achievement-list">${state.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div></div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
+    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title">${escapeHTML(state.profile.title)}</div>` : ""}<div class="achievement-list">${state.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div></div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
   }
 
   function renderPublicProfilePage() {
@@ -2106,7 +2106,7 @@
             <div class="section-subtitle">${items.length} edição(ões)</div>
           </div>
         </div>
-        <div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || `<div class="empty">Nenhuma edição cadastrada.</div>`}</div>
+        <div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || `<div class="empty">Nenhuma edição cadastrada.</div>`}</div>
       </div>`;
   }
 
@@ -2125,7 +2125,7 @@
             <button class="btn btn-danger" data-action="do-search">Pesquisar</button>
           </div>
           <div class="section-subtitle">${results.length} resultado(s)</div>
-          <div class="results-grid" style="margin-top:15px">${uniqueCatalogItems(results).map(card).join("") || `<div class="empty">Nada encontrado.</div>`}</div>
+          <div class="results-grid" style="margin-top:15px">${uniqueCatalogItems(results).map(item => card(item)).join("") || `<div class="empty">Nada encontrado.</div>`}</div>
         </div>
       </div>`;
   }
@@ -2291,7 +2291,7 @@
           <div><div class="eyebrow">Série</div><h2>${escapeHTML(series.seriesTitle || series.title)}</h2><div class="section-subtitle">${editions.length} edições disponíveis</div></div>
           <button class="small-btn" data-close>Fechar</button>
         </div>
-        <div class="results-grid">${editions.slice().sort((a,b) => String(a.issue || "").localeCompare(String(b.issue || ""), undefined, {numeric:true})).map(card).join("")}</div>
+        <div class="results-grid">${editions.slice().sort((a,b) => String(a.issue || "").localeCompare(String(b.issue || ""), undefined, {numeric:true})).map(item => card(item)).join("")}</div>
       </div>`;
     $("#modal-root").appendChild(overlay);
     hydrateHomeCovers();
@@ -2312,7 +2312,7 @@
       <div class="modal">
         <div class="section-head"><div><h2>${escapeHTML(c.title)}</h2><div class="section-subtitle">${items.length} edições</div></div><button class="small-btn" data-close>Fechar</button></div>
         <p style="color:#aaa">${escapeHTML(c.description || "")}</p>
-        <div class="results-grid">${items.map(card).join("") || `<div class="empty">Coleção vazia.</div>`}</div>
+        <div class="results-grid">${items.map(item => card(item)).join("") || `<div class="empty">Coleção vazia.</div>`}</div>
       </div>`;
     $("#modal-root").appendChild(overlay);
     hydrateHomeCovers();
@@ -2618,7 +2618,7 @@
     const series = uniqueCatalogItems(items.filter(x => x.seriesId));
     const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
     const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
-    const group = (title, groupItems) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(card).join("")}</div></section>` : "";
+    const group = (title, groupItems) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => card(item)).join("")}</div></section>` : "";
     return `<div class="content"><div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
   }
 
