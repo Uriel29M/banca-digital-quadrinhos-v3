@@ -1,0 +1,9 @@
+node_modules/
+
+# Supabase local state
+.supabase/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
