@@ -676,7 +676,8 @@
   }
 
   function extension(url) {
-    const clean = String(url || "").split("?")[0].split("#")[0];
+    const raw = String(url || "");
+    const clean = /^(https?:|blob:|data:)/i.test(raw) ? raw.split("?")[0].split("#")[0] : raw;
     const filename = clean.split(/[\\/]/).pop();
     return /^.+\.[a-z0-9]{1,8}$/i.test(filename) ? filename.split(".").pop().toLowerCase() : "";
   }
