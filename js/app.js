@@ -2467,9 +2467,12 @@
   window.BancaDigital = { state, openReader, openAdmin };
   const pathParts = window.location.pathname.split("/").filter(Boolean);
   const routeParts = pathParts[0]?.toLowerCase() === "banca-digital-quadrinhos-v3" ? pathParts.slice(1) : pathParts;
-  const initialPublicUsername = routeParts.length === 1 && routeParts[0].toLowerCase() !== "index.html"
-    ? cleanUsername(decodeURIComponent(routeParts[0]))
-    : "";
+  const queryProfile = new URLSearchParams(window.location.search).get("perfil");
+  const initialPublicUsername = queryProfile
+    ? cleanUsername(queryProfile)
+    : routeParts.length === 1 && routeParts[0].toLowerCase() !== "index.html"
+      ? cleanUsername(decodeURIComponent(routeParts[0]))
+      : "";
   if (initialPublicUsername && /^[a-z0-9_]{3,24}$/.test(initialPublicUsername)) {
     state.section = "public-profile";
     state.publicProfile = { loading: true, username: initialPublicUsername };
