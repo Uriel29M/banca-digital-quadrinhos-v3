@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Banca Digital — Quadrinhos & Mangás</title>
+  <meta name="description" content="Uma banca digital para descobrir, pesquisar e ler quadrinhos e mangás.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <a class="brand" href="#" data-action="home">
+        <span class="brand-mark">HQ</span>
+        <span>Banca<span class="brand-accent">Digital</span></span>
+      </a>
+
+      <nav class="main-nav" aria-label="Principal">
+        <button data-section="home" class="nav-link active">Início</button>
+        <button data-section="comics" class="nav-link">Quadrinhos</button>
+        <button data-section="manga" class="nav-link">Mangás</button>
+        <button data-section="collections" class="nav-link">Coleções</button>
+        <button data-section="search" class="nav-link">Pesquisar</button>
+      </nav>
+
+      <div class="top-actions">
+        <button class="icon-btn" data-action="focus-search" title="Pesquisar">⌕</button>
+        <button class="reader-btn" data-action="random">🎲 Aleatório</button>
+        <button class="avatar" data-action="open-admin" title="Administração">A</button>
+      </div>
+    </header>
+
+    <main id="main"></main>
+
+    <footer class="footer">
+      <div>
+        <strong>Banca Digital</strong>
+        <span>Uma banca de quadrinhos feita para a era digital.</span>
+      </div>
+      <div class="footer-links">
+        <button data-action="submit">Enviar quadrinho</button>
+        <button data-action="open-admin">Administração</button>
+      </div>
+    </footer>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root" class="toast-root"></div>
+
+  <!-- PDF.js -->
+  <script type="module">
+    // Carrega PDF.js localmente e configura o worker.
+    // Certifique-se de que os arquivos pdf.min.mjs e pdf.worker.min.mjs
+    // estão na pasta /js/pdfjs/ do seu projeto.
+    import * as pdfjsLib from "./js/pdfjs/pdf.min.mjs";
+    window.pdfjsLib = pdfjsLib;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `./js/pdfjs/pdf.worker.min.mjs`;
+  </script>
+  <!-- JSZip para CBZ -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
