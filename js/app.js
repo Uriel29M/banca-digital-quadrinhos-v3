@@ -2253,7 +2253,7 @@
   }
 
   function bind() {
-    const canManage = ["premium", "admin"].includes(state.profile?.plan);
+    const canManage = state.profile?.plan === "admin";
     const isAdmin = state.profile?.plan === "admin";
     const headerAvatar = $(".avatar");
     if (headerAvatar) {
