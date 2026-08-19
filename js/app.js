@@ -1789,7 +1789,7 @@
   }
 
   function renderLoginPage() {
-    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu @ ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>@usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6"></div><div class="auth-actions"><button class="btn btn-danger" data-auth-mode="login">Entrar</button><button class="small-btn" type="button" data-auth-mode="signup">Criar conta</button></div><button class="link-btn" type="button" data-forgot-password>Esqueci minha senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
+    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu @ ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>@usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6"></div><div class="auth-actions"><button type="submit" class="btn btn-danger" data-auth-mode="login">Entrar</button><button type="submit" class="small-btn" data-auth-mode="signup">Criar conta</button></div><button class="link-btn" type="button" data-forgot-password>Esqueci minha senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
   }
 
   function renderPasswordResetPage() {

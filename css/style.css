@@ -390,6 +390,11 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .series-modal { max-width: 980px; }
 .auth-page { min-height: 55vh; display: grid; place-items: center; }
 .auth-card { width: min(100%, 430px); padding: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.auth-card h1 { margin: 12px 0 10px; }
+.auth-card .section-subtitle { margin-bottom: 24px; line-height: 1.5; }
+.auth-card .field { margin-bottom: 18px; }
+.auth-card .field label { display: block; margin-bottom: 7px; }
+.auth-card .field input { width: 100%; }
 .auth-actions { display: flex; gap: 8px; margin-top: 14px; }
 .auth-message { min-height: 20px; margin-top: 12px; color: #ff9b9b; font-size: 12px; }
 .card-favorite { position: absolute; right: 9px; top: 9px; border: 0; border-radius: 50%; width: 30px; height: 30px; background: rgba(0,0,0,.72); color: #aaa; cursor: pointer; z-index: 2; }
