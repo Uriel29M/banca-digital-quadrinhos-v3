@@ -38,6 +38,7 @@
     ,session: null,
     profile: null,
     favoriteIds: new Set(),
+    readingProgress: new Map(),
     achievements: [],
     localBoxFiles: [],
     localBoxVisible: false
@@ -76,6 +77,8 @@
       state.profile = profile.data;
       const favorites = await sb.from("favorites").select("item_id").eq("user_id", session.user.id);
       state.favoriteIds = new Set((favorites.data || []).map(row => row.item_id));
+      const progress = await sb.from("reading_progress").select("item_id, page, total_pages, completed, updated_at").eq("user_id", session.user.id);
+      state.readingProgress = new Map((progress.data || []).map(row => [row.item_id, row]));
       const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", session.user.id);
       state.achievements = (achievements.data || []).map(row => row.achievements).filter(Boolean);
       await sb.rpc("touch_profile");
@@ -99,10 +102,12 @@
       return;
     }
     const favorites = await sb.from("favorites").select("item_id").eq("user_id", profile.data.id);
+    const progress = await sb.from("reading_progress").select("item_id, page, total_pages, completed, updated_at").eq("user_id", profile.data.id);
     const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", profile.data.id);
     state.publicProfile = {
       profile: profile.data,
       favoriteIds: new Set((favorites.data || []).map(row => row.item_id)),
+      readingProgress: new Map((progress.data || []).map(row => [row.item_id, row])),
       achievements: (achievements.data || []).map(row => row.achievements).filter(Boolean)
     };
     render();
@@ -112,7 +117,7 @@
     await sb?.auth.signOut();
     clearLocalBox();
     state.localBoxVisible = false;
-    state.session = null; state.profile = null; state.favoriteIds = new Set(); state.achievements = [];
+    state.session = null; state.profile = null; state.favoriteIds = new Set(); state.readingProgress = new Map(); state.achievements = [];
     state.section = "home"; render(); toast("Você saiu da conta.");
   }
 
@@ -157,6 +162,31 @@
 
   function openAuthPage() { state.authMode = "login"; setSection("login"); }
   function openSignupPage() { state.authMode = "signup"; setSection("signup"); }
+
+  function progressFor(item, progressMap = state.readingProgress) {
+    return progressMap?.get(item?.id) || null;
+  }
+
+  async function saveReadingProgress(item, page, totalPages) {
+    if (!state.session || !sb || item?.local || !item?.id || !totalPages) return;
+    const current = progressFor(item);
+    const completed = Boolean(current?.completed) || page >= Math.max(1, totalPages - 2);
+    const row = { user_id: state.session.user.id, item_id: item.id, page: Math.max(1, Math.min(page, totalPages)), total_pages: totalPages, completed, updated_at: new Date().toISOString() };
+    state.readingProgress.set(item.id, row);
+    $("[data-toggle-read]")?.replaceChildren(document.createTextNode(completed ? "Desmarcar como lida" : "Marcar como lida"));
+    const result = await sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
+    if (result.error) console.warn("Não foi possível salvar o progresso de leitura:", result.error.message);
+  }
+
+  async function toggleReadingCompleted(item, totalPages = progressFor(item)?.total_pages || 1) {
+    if (!state.session || !sb || item?.local) return;
+    const current = progressFor(item);
+    const row = { user_id: state.session.user.id, item_id: item.id, page: current?.page || 1, total_pages: totalPages, completed: !current?.completed, updated_at: new Date().toISOString() };
+    state.readingProgress.set(item.id, row);
+    const result = await sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
+    if (result.error) console.warn("Não foi possível atualizar o status de leitura:", result.error.message);
+    return row.completed;
+  }
 
   const coverMemoryCache = new Map();
   const coverLoading = new Map();
@@ -448,6 +478,8 @@
 
     const format = (item.format || extension(resolvedUrl)).toLowerCase();
     const skipCover = options.skipCover === true;
+    const savedProgress = progressFor(item);
+    const resumePage = savedProgress?.page || (skipCover ? 2 : 1);
     let readerGrayscale = options.grayscale === true;
     const overlay = document.createElement("div");
     overlay.className = "reader-overlay";
@@ -471,7 +503,7 @@
         </button>
         ${showModeSelector ? `<button class="small-btn" data-toggle-cover>${skipCover ? 'Incluir capa' : 'Ignorar capa'}</button>` : ''}
         <button class="small-btn" data-toggle-grayscale>${readerGrayscale ? 'Cor normal' : 'Preto e branco'}</button>
-        <button class="small-btn" data-reader-zoom>Zoom</button>
+        ${state.session && !item.local ? `<button class="small-btn" data-toggle-read>${savedProgress?.completed ? 'Desmarcar como lida' : 'Marcar como lida'}</button>` : ''}
         ${item.character ? `<button class="small-btn" data-browse-character>Ver personagem</button>` : ''}
         ${item.publisher ? `<button class="small-btn" data-browse-publisher>Ver editora</button>` : ''}
         <button class="small-btn" data-open-external>Abrir arquivo</button>
@@ -501,17 +533,16 @@
 
     const body = $("#reader-body", overlay);
     const controls = $("#reader-controls", overlay);
+    $("[data-toggle-read]", overlay)?.addEventListener("click", async event => {
+      const completed = await toggleReadingCompleted(item, progressFor(item)?.total_pages || 1);
+      event.currentTarget.textContent = completed ? "Desmarcar como lida" : "Marcar como lida";
+    });
     overlay._readerNavigate = direction => {
       const button = direction > 0 ? $("[data-next]", controls) : $("[data-prev]", controls);
       if (button && !button.disabled) button.click();
     };
     let suppressReaderClick = false;
     const toggleReaderChrome = () => overlay.classList.toggle("reader-immersive");
-    $("[data-reader-zoom]", overlay).onclick = () => {
-      overlay.classList.toggle("reader-zoom-fit");
-      overlay.classList.add("reader-immersive");
-      overlay._readerZoom?.();
-    };
     body.addEventListener("click", event => {
       if (suppressReaderClick || event.target.closest("button, a, select, textarea")) {
         suppressReaderClick = false;
@@ -567,14 +598,15 @@
 
 
     if (format === "pdf" || resolvedUrl.toLowerCase().split("?")[0].endsWith(".pdf")) {
-      renderPDFReader(item, resolvedUrl, body, controls, overlay, skipCover);
+      renderPDFReader(item, resolvedUrl, body, controls, overlay, skipCover, resumePage, saveReadingProgress);
     } else if (format === "cbz" || resolvedUrl.toLowerCase().split("?")[0].endsWith(".cbz")) {
-      renderCBZReader(item, resolvedUrl, body, controls, overlay, skipCover);
+      renderCBZReader(item, resolvedUrl, body, controls, overlay, skipCover, resumePage, saveReadingProgress);
     } else if (format === "cbr" || resolvedUrl.toLowerCase().split("?")[0].endsWith(".cbr")) {
-      renderCBRReader(item, resolvedUrl, body, controls, overlay, skipCover);
+      renderCBRReader(item, resolvedUrl, body, controls, overlay, skipCover, resumePage, saveReadingProgress);
     } else if (["jpg","jpeg","png","webp","gif"].includes(format)) {
       body.innerHTML = `<img class="reader-image" src="${escapeHTML(resolvedUrl)}" alt="">`;
       controls.innerHTML = `<span class="reader-page">Imagem</span>`;
+      saveReadingProgress(item, 1, 1);
     } else {
       const title = "Formato não suportado no leitor";
       const message = `O formato "${escapeHTML(format.toUpperCase())}" não pode ser lido diretamente no navegador. Use o botão "Abrir arquivo" para abri-lo em uma nova aba.`;
@@ -592,7 +624,7 @@
     return clean.includes(".") ? clean.split(".").pop().toLowerCase() : "";
   }
 
-  async function renderPDFReader(item, url, body, controls, overlay, skipCover = false) {
+  async function renderPDFReader(item, url, body, controls, overlay, skipCover = false, resumePage = 1, onPageChange = () => {}) {
     body.innerHTML = `<div class="empty" style="margin:auto">Carregando PDF…</div>`;
     try {
       const pdfjs = window.pdfjsLib;
@@ -604,19 +636,23 @@
       // Fetch the PDF data manually to have better control over errors.
       // This helps distinguish between "file not found" and "invalid file".
       body.innerHTML = `<div class="empty" style="margin:auto">Baixando PDFâ€¦</div>`;
-      const response = await fetch(url, {
-        method: "GET",
-        mode: "cors",
-        credentials: "omit",
-        cache: "no-store"
-      });
-      if (!response.ok) {
-        // Create an error object similar to what pdf.js might throw for a 404.
-        const error = new Error(`Arquivo não encontrado (HTTP ${response.status})`);
-        error.name = 'MissingPDFException'; // Mimic pdf.js error for our handler.
-        throw error;
+      let pdfData;
+      if (item.local && item.file) {
+        pdfData = await item.file.arrayBuffer();
+      } else {
+        const response = await fetch(url, {
+          method: "GET",
+          mode: "cors",
+          credentials: "omit",
+          cache: "no-store"
+        });
+        if (!response.ok) {
+          const error = new Error(`Arquivo não encontrado (HTTP ${response.status})`);
+          error.name = 'MissingPDFException';
+          throw error;
+        }
+        pdfData = await response.arrayBuffer();
       }
-      const pdfData = await response.arrayBuffer();
       if (!pdfData.byteLength) throw new Error("PDF vazio.");
 
       // Pass the data as a typed array.
@@ -626,7 +662,7 @@
       const currentReadingMode = state.readingMode;
 
       if (currentReadingMode === 'single-page') {
-        let page = skipCover && pdf.numPages > 1 ? 2 : 1;
+        let page = Math.max(1, Math.min(resumePage, pdf.numPages));
         const canvas = document.createElement("canvas");
         canvas.className = "reader-canvas";
         body.replaceChildren(canvas);
@@ -657,10 +693,11 @@
           `;
           $("[data-prev]", controls)?.addEventListener("click", async () => { if(page > 1){page--; await drawSinglePage();} });
           $("[data-next]", controls)?.addEventListener("click", async () => { if(page < pdf.numPages){page++; await drawSinglePage();} });
+          onPageChange(item, page, pdf.numPages);
         }
         await drawSinglePage();
       } else if (currentReadingMode === 'double-page') {
-        let spread = 0;
+        let spread = Math.max(0, Math.floor((resumePage - 1) / 2));
         const spreadContainer = document.createElement("div");
         spreadContainer.className = "reader-double-page";
         body.replaceChildren(spreadContainer);
@@ -724,6 +761,7 @@
               await drawSpread();
             }
           });
+          onPageChange(item, pagesToRender[0], pdf.numPages);
         }
 
         await drawSpread();
@@ -781,6 +819,7 @@
           }) || pageElements[0]; // Default to first page if none are clearly visible
 
           currentPageIndex = pageElements.indexOf(visiblePage);
+          onPageChange(item, Number(visiblePage.dataset.pageNum), pdf.numPages);
 
           controls.innerHTML = `
             <button data-prev ${currentPageIndex <= 0 ? "disabled" : ""}>↑</button>
@@ -803,6 +842,7 @@
 
         pageContainer.addEventListener('scroll', updateControls);
         updateControls(); // Call once to set initial state
+        pageElements.find(el => Number(el.dataset.pageNum) === resumePage)?.scrollIntoView({ block: 'start' });
 
         // Clean up observer and event listener when overlay is removed
         if (overlay) {
@@ -854,7 +894,7 @@
     }
   }
 
-  async function renderCBZReader(item, url, body, controls, overlay, skipCover = false) {
+  async function renderCBZReader(item, url, body, controls, overlay, skipCover = false, resumePage = 1, onPageChange = () => {}) {
     body.innerHTML = `<div class="empty" style="margin:auto">Baixando páginas do CBZ…</div>`;
     try {
       if (!window.JSZip) throw new Error("JSZip não carregou.");
@@ -870,7 +910,7 @@
       const currentReadingMode = state.readingMode;
 
       if (currentReadingMode === 'single-page') {
-        let page = skipCover && names.length > 1 ? 1 : 0;
+        let page = Math.max(0, Math.min(resumePage - 1, names.length - 1));
         const img = document.createElement("img");
         img.className = "reader-image";
         body.replaceChildren(img);
@@ -888,6 +928,7 @@
           `;
           $("[data-prev]", controls)?.addEventListener("click", async () => { if(page>0){page--;await draw();} });
           $("[data-next]", controls)?.addEventListener("click", async () => { if(page<names.length-1){page++;await draw();} });
+          onPageChange(item, page + 1, names.length);
         }
         await draw();
         $("[data-close-reader]", overlay).addEventListener('click', () => {
@@ -895,7 +936,7 @@
         }, { once: true });
       } else if (currentReadingMode === 'double-page') {
 
-        let spread = 0;
+        let spread = Math.max(0, Math.floor((resumePage - 1) / 2));
         const spreadContainer = document.createElement("div");
         spreadContainer.className = "reader-double-page";
         body.replaceChildren(spreadContainer);
@@ -946,6 +987,7 @@
           $("[data-next]", controls)?.addEventListener("click", async () => {
             if (second < names.length - 1) { spread++; await drawSpread(); }
           });
+          onPageChange(item, indexesToRender[0] + 1, names.length);
         }
 
         await drawSpread();
@@ -1014,10 +1056,12 @@
           `;
           $("[data-prev]", controls)?.addEventListener("click", () => pageElements[Math.max(0, currentPageIndex - 1)].scrollIntoView({ behavior: 'smooth', block: 'start' }));
           $("[data-next]", controls)?.addEventListener("click", () => pageElements[Math.min(pageElements.length - 1, currentPageIndex + 1)].scrollIntoView({ behavior: 'smooth', block: 'start' }));
+          onPageChange(item, Number(visiblePage.dataset.pageNum), names.length);
         };
 
         pageContainer.addEventListener('scroll', updateControls, { passive: true });
         updateControls();
+        pageElements.find(el => Number(el.dataset.pageNum) === resumePage)?.scrollIntoView({ block: 'start' });
 
         $("[data-close-reader]", overlay).addEventListener('click', () => {
           pageContainer.removeEventListener('scroll', updateControls);
@@ -1061,7 +1105,7 @@
     body.innerHTML = `<div class="empty" style="margin:auto;max-width:650px">${escapeHTML(message)}</div>`;
     console.log("[CBR]", message);
   };
-  async function renderCBRReader(item, url, body, controls, overlay, skipCover = false) {
+  async function renderCBRReader(item, url, body, controls, overlay, skipCover = false, resumePage = 1, onPageChange = () => {}) {
     let objectUrl = null;
     let archive = null;
     let objectUrls = null; // For continuous scroll
@@ -1460,7 +1504,7 @@
       const currentReadingMode = state.readingMode;
 
       if (currentReadingMode === 'single-page') {
-        let page = skipCover && imageFiles.length > 1 ? 1 : 0;
+        let page = Math.max(0, Math.min(resumePage - 1, imageFiles.length - 1));
         const img = document.createElement("img");
         img.className = "reader-image";
         img.alt = "Página do quadrinho";
@@ -1482,13 +1526,14 @@
           `;
           $("[data-prev]", controls)?.addEventListener("click", async () => { if (page > 0) { page--; await draw().catch(e => { page++; console.error(e); }); } });
           $("[data-next]", controls)?.addEventListener("click", async () => { if (page < imageFiles.length - 1) { page++; await draw().catch(e => { page--; console.error(e); }); } });
+          onPageChange(item, page + 1, imageFiles.length);
         }
         await draw();
         $("[data-close-reader]", overlay).addEventListener('click', () => {
           if (objectUrl) URL.revokeObjectURL(objectUrl);
         }, { once: true });
       } else if (currentReadingMode === 'double-page') {
-        let spread = 0;
+        let spread = Math.max(0, Math.floor((resumePage - 1) / 2));
         const spreadContainer = document.createElement("div");
         spreadContainer.className = "reader-double-page";
         body.replaceChildren(spreadContainer);
@@ -1545,6 +1590,7 @@
           $("[data-next]", controls)?.addEventListener("click", async () => {
             if (second < imageFiles.length - 1) { spread++; await drawSpread(); }
           });
+          onPageChange(item, indexesToRender[0] + 1, imageFiles.length);
         }
 
         await drawSpread();
@@ -1613,6 +1659,8 @@
           const nextBtn = $("[data-next]", controls);
           prevBtn?.addEventListener("click", () => pageElements[Math.max(0, currentPageIndex - 1)].scrollIntoView({ behavior: 'smooth', block: 'start' }));
           nextBtn?.addEventListener("click", () => pageElements[Math.min(pageElements.length - 1, currentPageIndex + 1)].scrollIntoView({ behavior: 'smooth', block: 'start' }));
+          onPageChange(item, Number(visiblePage.dataset.pageNum), imageFiles.length);
+          pageElements.find(el => Number(el.dataset.pageNum) === resumePage)?.scrollIntoView({ block: 'start' });
         };
 
         pageContainer.addEventListener('scroll', updateControls, { passive: true });
@@ -1889,7 +1937,7 @@
     const elements = $$('[data-cover-id]');
     if (!elements.length) return;
     const load = element => {
-      const item = state.db.library.find(x => x.id === element.dataset.coverId);
+      const item = state.db.library.find(x => x.id === element.dataset.coverId) || state.localBoxFiles.find(x => x.id === element.dataset.coverId);
       if (!item || element.dataset.coverReady === "true") return;
       element.dataset.coverReady = "true";
       const controller = new AbortController();
@@ -1910,13 +1958,15 @@
     });
   }
 
-  function card(item) {
+  function card(item, progressMap = state.readingProgress) {
+    const completed = progressFor(item, progressMap)?.completed;
     return `
       <article class="card" data-open="${escapeHTML(item.id)}">
         <div class="cover" data-cover-id="${escapeHTML(item.id)}" style="background-image:url('${escapeHTML(coverFor(item))}')">
           <span class="cover-number">${escapeHTML(item.issue || "")}</span>
           <button class="card-favorite ${state.favoriteIds.has(item.id) ? 'is-favorite' : ''}" data-favorite="${escapeHTML(item.id)}" title="Salvar na estante">★</button>
         </div>
+        ${completed ? '<div class="card-completed">✓ Concluída</div>' : ''}
         <div class="card-body">
           <div class="card-title">${escapeHTML(item.seriesTitle || item.title)}</div>
           <div class="card-meta">${formatType(item.type)} · ${escapeHTML(String(item.year || ""))}</div>
@@ -2011,7 +2061,7 @@
   }
 
   function localFileCard(file) {
-    return `<article class="card local-file-card" data-local-open="${escapeHTML(file.id)}"><div class="cover local-file-cover"><span class="local-file-icon">▣</span></div><div class="card-body"><div class="card-title">${escapeHTML(file.title)}</div><div class="card-meta">${escapeHTML(file.format.toUpperCase())} · somente nesta sessão</div></div></article>`;
+    return `<article class="card local-file-card" data-local-open="${escapeHTML(file.id)}"><div class="cover local-file-cover" data-cover-id="${escapeHTML(file.id)}" style="background-image:url('${escapeHTML(coverFor(file))}')"><span class="local-file-icon">▣</span></div><div class="card-body"><div class="card-title">${escapeHTML(file.title)}</div><div class="card-meta">${escapeHTML(file.format.toUpperCase())} · somente nesta sessão</div></div></article>`;
   }
 
   function renderLocalBoxPage() {
@@ -2042,7 +2092,7 @@
         </div>
       </div>
       <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div>
-      <div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || '<div class="empty">Esta estante ainda está vazia.</div>'}</div>
+      <div class="results-grid">${uniqueCatalogItems(items).map(item => card(item, publicState.readingProgress)).join("") || '<div class="empty">Esta estante ainda está vazia.</div>'}</div>
     </div>`;
   }
 
