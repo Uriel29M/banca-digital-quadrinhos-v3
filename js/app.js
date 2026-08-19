@@ -38,7 +38,8 @@
     ,session: null,
     profile: null,
     favoriteIds: new Set(),
-    achievements: []
+    achievements: [],
+    localBoxFiles: []
   };
 
   const sb = window.supabase?.createClient && window.BANCA_SUPABASE_URL
@@ -108,8 +109,36 @@
 
   async function signOut() {
     await sb?.auth.signOut();
+    clearLocalBox();
     state.session = null; state.profile = null; state.favoriteIds = new Set(); state.achievements = [];
     state.section = "home"; render(); toast("Você saiu da conta.");
+  }
+
+  function clearLocalBox() {
+    state.localBoxFiles.forEach(file => file.fileUrl && URL.revokeObjectURL(file.fileUrl));
+    state.localBoxFiles = [];
+  }
+
+  function localFileFrom(file) {
+    const name = file.name.replace(/\\/g, "/").split("/").pop();
+    const title = name.replace(/\\.(pdf|cbz|cbr|jpg|jpeg|png|webp|gif)$/i, "");
+    return { id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`, title, issue: "", type: "comic", year: "", format: extension(name), file, fileUrl: URL.createObjectURL(file), local: true, clicks: 0 };
+  }
+
+  function supportedLocalFile(file) {
+    return /\\.(pdf|cbz|cbr|jpg|jpeg|png|webp|gif)$/i.test(file.name);
+  }
+
+  function openLocalFile(file, keepInBox = false) {
+    if (!file || !supportedLocalFile(file)) return toast("Escolha um PDF, CBZ, CBR ou uma imagem.");
+    const item = localFileFrom(file);
+    if (keepInBox) {
+      state.localBoxFiles.push(item);
+      render();
+      toast("Pasta adicionada à Minha caixa. Ela ficará disponível apenas nesta sessão.");
+      return;
+    }
+    openReader(item, { localObjectUrl: item.fileUrl });
   }
 
   async function toggleFavorite(itemId) {
@@ -399,8 +428,10 @@
   function openReader(item, options = {}) {
     if (!item) return;
 
-    item.clicks = (Number(item.clicks) || 0) + 1;
-    save();
+    if (!item.local) {
+      item.clicks = (Number(item.clicks) || 0) + 1;
+      save();
+    }
 
     const isTelegramLink = (url) => /^https?:\/\/(www\.)?t(elegram)?\.me\//.test(url || "");
 
@@ -448,11 +479,14 @@
     `;
     document.body.appendChild(overlay);
 
-    $("[data-close-reader]", overlay).onclick = () => overlay.remove();
+    $("[data-close-reader]", overlay).onclick = () => {
+      overlay.remove();
+      if (options.localObjectUrl) URL.revokeObjectURL(options.localObjectUrl);
+    };
     $("[data-open-external]", overlay).onclick = () => window.open(resolvedUrl, "_blank", "noopener");
     $("[data-toggle-cover]", overlay)?.addEventListener("click", () => {
       overlay.remove();
-      openReader(item, { skipCover: !skipCover });
+      openReader(item, { skipCover: !skipCover, localObjectUrl: options.localObjectUrl });
     });
 
     $("[data-toggle-grayscale]", overlay)?.addEventListener("click", event => {
@@ -1968,10 +2002,20 @@
     return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Nova senha</h1><p class="section-subtitle">Escolha uma nova senha para sua conta.</p><form id="password-reset-form"><div class="field"><label>Nova senha</label><input name="password" type="password" required minlength="6"></div><div class="field"><label>Confirmar senha</label><input name="confirmation" type="password" required minlength="6"></div><button class="btn btn-danger">Salvar nova senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
   }
 
+  function localFileCard(file) {
+    return `<article class="card local-file-card" data-local-open="${escapeHTML(file.id)}"><div class="cover local-file-cover"><span class="local-file-icon">▣</span></div><div class="card-body"><div class="card-title">${escapeHTML(file.title)}</div><div class="card-meta">${escapeHTML(file.format.toUpperCase())} · somente nesta sessão</div></div></article>`;
+  }
+
+  function renderLocalBoxPage() {
+    if (!state.session) return renderLoginPage();
+    const files = state.localBoxFiles;
+    return `<div class="content local-box-page"><div class="section-head"><div><div class="eyebrow">Área privada</div><h1 class="section-title">Minha caixa</h1><div class="section-subtitle">Arquivos locais para ler no navegador</div></div><button class="small-btn" data-section="shelf">Voltar à estante</button></div><div class="notice local-box-notice"><b>Privacidade:</b> os arquivos são armazenados apenas neste navegador, na memória desta sessão. Eles não são enviados para o servidor e desaparecem quando você sair da conta ou fechar a página.</div><div class="local-upload-grid"><label class="local-upload-card"><span class="local-upload-icon">▣</span><strong>Enviar uma pasta</strong><span>Adicione vários quadrinhos de uma vez. Eles aparecerão nesta aba.</span><input id="local-folder-input" type="file" webkitdirectory directory multiple accept=".pdf,.cbz,.cbr,.jpg,.jpeg,.png,.webp,.gif"></label><label class="local-upload-card"><span class="local-upload-icon">＋</span><strong>Enviar um arquivo</strong><span>Abre diretamente no leitor e é descartado ao fechá-lo.</span><input id="local-file-input" type="file" accept=".pdf,.cbz,.cbr,.jpg,.jpeg,.png,.webp,.gif"></label></div><section class="section"><div class="section-head"><div><h2 class="section-title">Arquivos da pasta</h2><div class="section-subtitle">${files.length} arquivo(s) nesta sessão</div></div>${files.length ? '<button class="small-btn" data-action="clear-local-box">Limpar caixa</button>' : ''}</div><div class="results-grid">${files.map(localFileCard).join("") || '<div class="empty">Escolha uma pasta para começar sua leitura local.</div>'}</div></section></div>`;
+  }
+
   function renderShelfPage() {
     if (!state.session) return renderLoginPage();
     const items = state.db.library.filter(item => state.favoriteIds.has(item.id));
-    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title">${escapeHTML(state.profile.title)}</div>` : ""}<div class="achievement-list">${state.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div></div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div></div><div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
+    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title">${escapeHTML(state.profile.title)}</div>` : ""}<div class="achievement-list">${state.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div></div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-section="local-box">Minha caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
   }
 
   function renderPublicProfilePage() {
@@ -2057,6 +2101,7 @@
     else if (state.section === "login") main.innerHTML = renderLoginPage();
     else if (state.section === "signup") main.innerHTML = renderSignupPage();
     else if (state.section === "shelf") main.innerHTML = renderShelfPage();
+    else if (state.section === "local-box") main.innerHTML = renderLocalBoxPage();
     else if (state.section === "public-profile") main.innerHTML = renderPublicProfilePage();
     else if (state.section === "password-reset") main.innerHTML = renderPasswordResetPage();
     bind();
@@ -2075,6 +2120,7 @@
     const isAdmin = state.profile?.plan === "admin";
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
     $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
+    $$('.local-box-nav').forEach(button => { button.style.display = state.session ? "" : "none"; });
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
       const item = state.db.library.find(x => x.id === el.dataset.open);
@@ -2097,6 +2143,17 @@
       if (a === "submit") { if (isAdmin) openSubmission(); else toast("O envio de quadrinhos é exclusivo para administradores."); }
     }));
     $$("[data-collection]").forEach(el => el.addEventListener("click", () => openCollection(el.dataset.collection)));
+    if ($('[data-action="clear-local-box"]')) $('[data-action="clear-local-box"]').onclick = () => { clearLocalBox(); render(); toast("Minha caixa foi limpa."); };
+    $("#local-folder-input")?.addEventListener("change", event => {
+      const files = [...event.target.files].filter(supportedLocalFile);
+      if (!files.length) return toast("Nenhum quadrinho compatível foi encontrado na pasta.");
+      files.forEach(file => openLocalFile(file, true));
+    });
+    $("#local-file-input")?.addEventListener("change", event => openLocalFile(event.target.files[0]));
+    $$('[data-local-open]').forEach(el => el.addEventListener("click", () => {
+      const file = state.localBoxFiles.find(item => item.id === el.dataset.localOpen);
+      if (file) openReader(file);
+    }));
     $("#search-input")?.addEventListener("keydown", e => {
       if (e.key === "Enter") { state.search = e.target.value; render(); $("#search-input")?.focus(); }
     });
