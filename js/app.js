@@ -53,6 +53,14 @@
     return String(value || "").replace(/^@/, "").trim().toLowerCase();
   }
 
+  function publicProfileHref(username) {
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    url.searchParams.set("perfil", cleanUsername(username));
+    return `${url.pathname}?${url.searchParams.toString()}`;
+  }
+
   async function loadAccount() {
     if (!sb) return;
     const { data: { session } } = await sb.auth.getSession();
@@ -327,7 +335,10 @@
         list.innerHTML = '<span class="section-subtitle">Não foi possível carregar os comentários.</span>';
         return;
       }
-      list.innerHTML = (result.data || []).map(comment => `<article class="comment"><b>@${escapeHTML(comment.profiles?.username || "usuário")}</b>${comment.profiles?.title ? `<span class="comment-title">${escapeHTML(comment.profiles.title)}</span>` : ""}<p>${escapeHTML(comment.body)}</p></article>`).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
+      list.innerHTML = (result.data || []).map(comment => {
+        const username = cleanUsername(comment.profiles?.username || "usuário");
+        return `<article class="comment"><div class="comment-author-row"><a class="comment-author" href="${publicProfileHref(username)}" target="_blank" rel="noopener">@${escapeHTML(username)}</a>${comment.profiles?.title ? `<span class="comment-title">${escapeHTML(comment.profiles.title)}</span>` : ""}</div><p>${escapeHTML(comment.body)}</p></article>`;
+      }).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
     };
     await refresh();
     $(".comment-form", panel)?.addEventListener("submit", async event => {
