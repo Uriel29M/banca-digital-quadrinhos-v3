@@ -2466,8 +2466,9 @@
 
   window.BancaDigital = { state, openReader, openAdmin };
   const pathParts = window.location.pathname.split("/").filter(Boolean);
-  const initialPublicUsername = pathParts.length === 1 && pathParts[0].toLowerCase() !== "index.html"
-    ? cleanUsername(decodeURIComponent(pathParts[0]))
+  const routeParts = pathParts[0]?.toLowerCase() === "banca-digital-quadrinhos-v3" ? pathParts.slice(1) : pathParts;
+  const initialPublicUsername = routeParts.length === 1 && routeParts[0].toLowerCase() !== "index.html"
+    ? cleanUsername(decodeURIComponent(routeParts[0]))
     : "";
   if (initialPublicUsername && /^[a-z0-9_]{3,24}$/.test(initialPublicUsername)) {
     state.section = "public-profile";
