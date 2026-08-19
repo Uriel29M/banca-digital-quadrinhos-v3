@@ -73,55 +73,6 @@ window.DEFAULT_LIBRARY = [
     tags: ["aventura", "comédia"],
     collectionIds: ["colecao-001"]
   },
-  // Catálogo externo: as páginas-fonte ficam registradas até que o URL direto
-  // de cada edição seja fornecido pela fonte autorizada.
-  {
-  id: "series-absolute-batman",
-  title: "Absolute Batman",
-  type: "comic",
-
-  author: "Scott Snyder; Nick Dragotta",
-  publisher: "DC Comics",
-  description: "Sem a mansão, sem o dinheiro e sem o mordomo: uma nova visão do Cavaleiro das Trevas.",
-
-  tags: [
-    "batman",
-    "dc comics",
-    "super-herói"
-  ],
-
-  featured: false,
-  randomWeight: 5,
-
-  editions: [
-    {
-      id: "absolute-batman-001",
-      issue: "01",
-      year: 2024,
-      format: "CBR",
-      fileUrl: "https://download2273.mediafire.com/123jlz5gngugBQYLW1ENFQwPu5wr-lTOmDnUGYQk1KbfMqXkDccFFVBAT4hmqTUuaorxCxGHZKKF4rW1_EDOWRwO7vIY1m8aMDECEd9SdgqAAVASWDcTvK9Vxbanlc9Ie88By5hjJESv_IX2fRxTyCGUS6XZNpQxwlzdVEeBOld2gZPs/ocj24y45s6qs4xk/Absolute+Batman+001+%282024%29+001.cbr",
-      coverUrl: ""
-    },
-
-    {
-      id: "absolute-batman-002",
-      issue: "02",
-      year: 2024,
-      format: "CBR",
-      fileUrl: "https://download2261.mediafire.com/ve0al4loohpgGxLwBqN4ex6GG74p8P0fFEI_lkiXxmH_a_6oXe1EeM18M7RyeJ2H3BXpop4GhAGxqPLmd8akkOvk9N92CBwSE7kp24N6R2c3eRRYBiJME5DnDxbrq7kFOPBrBUGohVX_aBZPgpuHluWLkut0-MArCIp9-KP3L74Y2Fmy/hpw5ut4sn7d53lg/AbsltBtm+%23002+%282024%29%28ZonaFantasma%29.cbr.cbr",
-      coverUrl: ""
-    },
-
-    {
-      id: "absolute-batman-003",
-      issue: "03",
-      year: 2025,
-      format: "CBR",
-      fileUrl: "https://download2272.mediafire.com/a2qheb5ypezg3YE3cwGGnLvuBzqEy-e_puOUG_qiDwZ_gKzXTeGWXFIeVyFINb2e-IfewVMSl_Y61Rst1fVQc9gTIrBdiib8X_YzKHPfo1Zvry1yUWxklk4gachUrRD9j36ft5wTq2V4SljwiUs10m-Brf1c0v7IlKVLpNzVL8gGspqL/8d5cjkk1hsjataw/AbsltBtm+%23003+%282024%29%28ZonaFantasma%29.cbr.cbr",
-      coverUrl: ""
-    }
-  ]
-}
 ];
 
 window.DEFAULT_COLLECTIONS = [
