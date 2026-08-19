@@ -53,6 +53,10 @@
     return String(value || "").replace(/^@/, "").trim().toLowerCase();
   }
 
+  function appAssetUrl(path) {
+    return new URL(String(path).replace(/^\/+/, ""), document.baseURI).href;
+  }
+
   function publicProfileHref(username) {
     const url = new URL(window.location.href);
     url.search = "";
@@ -1160,23 +1164,11 @@
 
       status("Verificando biblioteca CBR…");
 
-      const LIBARCHIVE_MAIN =
-        new URL(
-          "/libarchive/libarchive.js",
-          window.location.origin
-        ).href;
+      const LIBARCHIVE_MAIN = appAssetUrl("libarchive/libarchive.js");
 
-      const LIBARCHIVE_WORKER =
-        new URL(
-          "/libarchive/worker-bundle.js",
-          window.location.origin
-        ).href;
+      const LIBARCHIVE_WORKER = appAssetUrl("libarchive/worker-bundle.js");
 
-      const LIBARCHIVE_WASM =
-        new URL(
-          "/libarchive/libarchive.wasm",
-          window.location.origin
-        ).href;
+      const LIBARCHIVE_WASM = appAssetUrl("libarchive/libarchive.wasm");
 
       console.log("[CBR] MAIN:", LIBARCHIVE_MAIN);
       console.log("[CBR] WORKER:", LIBARCHIVE_WORKER);
@@ -1239,7 +1231,7 @@
 
       status("Inicializando leitor CBR…");
 
-      const workerUrl = new URL("/libarchive/worker-bundle.js", window.location.href).href;
+      const workerUrl = appAssetUrl("libarchive/worker-bundle.js");
       Archive.init({
         workerUrl
       });
@@ -1805,9 +1797,9 @@
   async function cbrCover(url, signal) {
     const response = await fetch(url, { mode: "cors", credentials: "omit", cache: "no-store", signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const module = await import(new URL("/libarchive/libarchive.js", window.location.origin).href);
+    const module = await import(appAssetUrl("libarchive/libarchive.js"));
     const Archive = module.Archive;
-    Archive.init({ workerUrl: new URL("/libarchive/worker-bundle.js", window.location.origin).href });
+    Archive.init({ workerUrl: appAssetUrl("libarchive/worker-bundle.js") });
     const archive = await Archive.open(new File([await response.arrayBuffer()], "cover.cbr"));
     const files = await archive.getFilesObject();
     const images = [];
