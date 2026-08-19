@@ -167,6 +167,20 @@
     return progressMap?.get(item?.id) || null;
   }
 
+  function updateCompletionCards(item, completed) {
+    $$('[data-open]').filter(element => element.dataset.open === item?.id).forEach(cardElement => {
+      const existing = $(".card-completed", cardElement);
+      if (completed && !existing) {
+        const status = document.createElement("div");
+        status.className = "card-completed";
+        status.textContent = "✓ Concluída";
+        cardElement.querySelector(".card-body")?.before(status);
+      } else if (!completed && existing) {
+        existing.remove();
+      }
+    });
+  }
+
   async function saveReadingProgress(item, page, totalPages) {
     if (!state.session || !sb || item?.local || !item?.id || !totalPages) return;
     const current = progressFor(item);
@@ -174,17 +188,19 @@
     const row = { user_id: state.session.user.id, item_id: item.id, page: Math.max(1, Math.min(page, totalPages)), total_pages: totalPages, completed, updated_at: new Date().toISOString() };
     state.readingProgress.set(item.id, row);
     $("[data-toggle-read]")?.replaceChildren(document.createTextNode(completed ? "Desmarcar como lida" : "Marcar como lida"));
+    updateCompletionCards(item, completed);
     const result = await sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
     if (result.error) console.warn("Não foi possível salvar o progresso de leitura:", result.error.message);
   }
 
-  async function toggleReadingCompleted(item, totalPages = progressFor(item)?.total_pages || 1) {
+  function toggleReadingCompleted(item, totalPages = progressFor(item)?.total_pages || 1) {
     if (!state.session || !sb || item?.local) return;
     const current = progressFor(item);
     const row = { user_id: state.session.user.id, item_id: item.id, page: current?.page || 1, total_pages: totalPages, completed: !current?.completed, updated_at: new Date().toISOString() };
     state.readingProgress.set(item.id, row);
-    const result = await sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
-    if (result.error) console.warn("Não foi possível atualizar o status de leitura:", result.error.message);
+    updateCompletionCards(item, row.completed);
+    const result = sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
+    result.then(response => { if (response.error) console.warn("Não foi possível atualizar o status de leitura:", response.error.message); });
     return row.completed;
   }
 
@@ -533,8 +549,8 @@
 
     const body = $("#reader-body", overlay);
     const controls = $("#reader-controls", overlay);
-    $("[data-toggle-read]", overlay)?.addEventListener("click", async event => {
-      const completed = await toggleReadingCompleted(item, progressFor(item)?.total_pages || 1);
+    $("[data-toggle-read]", overlay)?.addEventListener("click", event => {
+      const completed = toggleReadingCompleted(item, progressFor(item)?.total_pages || 1);
       event.currentTarget.textContent = completed ? "Desmarcar como lida" : "Marcar como lida";
     });
     overlay._readerNavigate = direction => {
