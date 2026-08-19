@@ -1789,7 +1789,7 @@
   }
 
   function renderLoginPage() {
-    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu @ e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>@usuário</label><input name="username" required pattern="[A-Za-z0-9_]{3,24}" placeholder="seu_usuario"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6"></div><div class="auth-actions"><button class="btn btn-danger" data-auth-mode="login">Entrar</button><button class="small-btn" type="button" data-auth-mode="signup">Criar conta</button></div><div class="auth-message" id="auth-message"></div></form></div></div>`;
+    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu @ ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>@usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6"></div><div class="auth-actions"><button class="btn btn-danger" data-auth-mode="login">Entrar</button><button class="small-btn" type="button" data-auth-mode="signup">Criar conta</button></div><div class="auth-message" id="auth-message"></div></form></div></div>`;
   }
 
   function renderShelfPage() {
@@ -1902,15 +1902,17 @@
     $("#auth-form")?.addEventListener("submit", async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      const username = cleanUsername(form.get("username"));
+      const identifier = String(form.get("username") || "").trim();
+      const username = cleanUsername(identifier);
       const password = String(form.get("password") || "");
       const message = $("#auth-message");
       if (!sb) { message.textContent = "A autenticação ainda não foi configurada."; return; }
-      if (!/^[a-z0-9_]{3,24}$/.test(username)) { message.textContent = "Use de 3 a 24 caracteres: letras, números ou _."; return; }
+      if (!identifier.includes("@") && !/^[a-z0-9_]{3,24}$/.test(username)) { message.textContent = "Use de 3 a 24 caracteres: letras, números ou _."; return; }
       const mode = event.submitter?.dataset.authMode || "login";
+      if (mode === "signup" && identifier.includes("@")) { message.textContent = "Para criar uma conta, use apenas seu @. O email serve para entrar em uma conta já criada."; return; }
       const result = mode === "signup"
         ? await sb.auth.signUp({ email: authEmail(username), password, options: { data: { username } } })
-        : await sb.auth.signInWithPassword({ email: authEmail(username), password });
+        : await sb.auth.signInWithPassword({ email: identifier.includes("@") ? identifier : authEmail(username), password });
       if (result.error) { message.textContent = result.error.message; return; }
       if (mode === "signup" && !result.data.session) { message.textContent = "Conta criada. Desative a confirmação de email no Supabase para entrar sem email."; return; }
       await loadAccount();

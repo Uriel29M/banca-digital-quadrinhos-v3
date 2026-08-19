@@ -40,6 +40,9 @@ create table if not exists public.user_achievements (
 );
 
 insert into storage.buckets (id, name, public) values ('avatars', 'avatars', true) on conflict (id) do nothing;
+drop policy if exists "avatars are public" on storage.objects;
+drop policy if exists "users upload own avatar" on storage.objects;
+drop policy if exists "users update own avatar" on storage.objects;
 create policy "avatars are public" on storage.objects for select using (bucket_id = 'avatars');
 create policy "users upload own avatar" on storage.objects for insert with check (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
 create policy "users update own avatar" on storage.objects for update using (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
@@ -67,6 +70,18 @@ alter table public.favorites enable row level security;
 alter table public.comments enable row level security;
 alter table public.achievements enable row level security;
 alter table public.user_achievements enable row level security;
+
+drop policy if exists "profiles are public" on public.profiles;
+drop policy if exists "users update own profile" on public.profiles;
+drop policy if exists "users read own favorites" on public.favorites;
+drop policy if exists "users manage own favorites" on public.favorites;
+drop policy if exists "comments are public" on public.comments;
+drop policy if exists "users create own comments" on public.comments;
+drop policy if exists "users delete own comments" on public.comments;
+drop policy if exists "achievements are public" on public.achievements;
+drop policy if exists "user achievements are public" on public.user_achievements;
+drop policy if exists "admins manage achievements" on public.achievements;
+drop policy if exists "admins award achievements" on public.user_achievements;
 
 create policy "profiles are public" on public.profiles for select using (true);
 create policy "users update own profile" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
