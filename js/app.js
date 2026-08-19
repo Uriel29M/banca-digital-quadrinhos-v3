@@ -1789,7 +1789,11 @@
   }
 
   function renderLoginPage() {
-    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu @ ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>@usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6"></div><div class="auth-actions"><button class="btn btn-danger" data-auth-mode="login">Entrar</button><button class="small-btn" type="button" data-auth-mode="signup">Criar conta</button></div><div class="auth-message" id="auth-message"></div></form></div></div>`;
+    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu @ ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>@usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6"></div><div class="auth-actions"><button class="btn btn-danger" data-auth-mode="login">Entrar</button><button class="small-btn" type="button" data-auth-mode="signup">Criar conta</button></div><button class="link-btn" type="button" data-forgot-password>Esqueci minha senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
+  }
+
+  function renderPasswordResetPage() {
+    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Nova senha</h1><p class="section-subtitle">Escolha uma nova senha para sua conta.</p><form id="password-reset-form"><div class="field"><label>Nova senha</label><input name="password" type="password" required minlength="6"></div><div class="field"><label>Confirmar senha</label><input name="confirmation" type="password" required minlength="6"></div><button class="btn btn-danger">Salvar nova senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
   }
 
   function renderShelfPage() {
@@ -1860,6 +1864,7 @@
     else if (state.section === "entity") main.innerHTML = renderEntityPage();
     else if (state.section === "login") main.innerHTML = renderLoginPage();
     else if (state.section === "shelf") main.innerHTML = renderShelfPage();
+    else if (state.section === "password-reset") main.innerHTML = renderPasswordResetPage();
     bind();
     hydrateHomeCovers();
   }
@@ -1917,6 +1922,27 @@
       if (mode === "signup" && !result.data.session) { message.textContent = "Conta criada. Desative a confirmação de email no Supabase para entrar sem email."; return; }
       await loadAccount();
       setSection("shelf");
+    });
+    $("[data-forgot-password]")?.addEventListener("click", async () => {
+      const email = prompt("Digite o email usado na conta:");
+      if (!email || !sb) return;
+      const redirectTo = `${window.location.origin}${window.location.pathname}`;
+      const result = await sb.auth.resetPasswordForEmail(email.trim(), { redirectTo });
+      toast(result.error ? result.error.message : "Enviamos o link de recuperação.");
+    });
+    $("#password-reset-form")?.addEventListener("submit", async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const password = String(form.get("password") || "");
+      const confirmation = String(form.get("confirmation") || "");
+      const message = $("#auth-message");
+      if (password !== confirmation) { message.textContent = "As senhas não coincidem."; return; }
+      const result = await sb.auth.updateUser({ password });
+      if (result.error) { message.textContent = result.error.message; return; }
+      await sb.auth.signOut({ scope: "global" });
+      state.session = null; state.profile = null; state.favoriteIds = new Set();
+      toast("Senha alterada. Entre novamente com a nova senha.");
+      setSection("login");
     });
   }
 
@@ -2274,5 +2300,12 @@
 
   window.BancaDigital = { state, openReader, openAdmin };
   render();
+  sb?.auth.onAuthStateChange((event, session) => {
+    if (event === "PASSWORD_RECOVERY") {
+      state.session = session;
+      state.section = "password-reset";
+      render();
+    }
+  });
   loadAccount().catch(error => console.warn("Supabase indisponível:", error));
 })();
