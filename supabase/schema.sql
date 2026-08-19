@@ -112,6 +112,8 @@ drop policy if exists "admins award achievements" on public.user_achievements;
 
 create policy "profiles are public" on public.profiles for select using (true);
 create policy "users update own profile" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
+drop policy if exists "admins update user plans" on public.profiles;
+create policy "admins update user plans" on public.profiles for update using (public.is_admin()) with check (public.is_admin());
 create policy "favorites are public" on public.favorites for select using (true);
 create policy "users manage own favorites" on public.favorites for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "reading progress is public" on public.reading_progress for select using (true);

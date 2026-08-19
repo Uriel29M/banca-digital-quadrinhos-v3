@@ -2118,7 +2118,14 @@
     $("#account-plan-form", overlay).onsubmit = async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      const result = await sb.rpc("set_user_plan", { p_username: cleanUsername(form.get("username")), p_plan: form.get("plan") });
+      const username = cleanUsername(form.get("username"));
+      const plan = String(form.get("plan") || "free");
+      let result = await sb.rpc("set_user_plan", { p_username: username, p_plan: plan });
+      if (result.error && /set_user_plan|schema cache|function/i.test(result.error.message)) {
+        const profile = await sb.from("profiles").select("id").eq("username", username).maybeSingle();
+        if (!profile.data) return toast("Usuário não encontrado.");
+        result = await sb.from("profiles").update({ plan }).eq("id", profile.data.id);
+      }
       if (result.error) return toast(result.error.message);
       overlay.remove(); toast("Tipo de conta atualizado.");
     };
