@@ -28,6 +28,7 @@
     db: DataStore.load(),
     section: "home",
     authMode: "login",
+    publicProfile: null,
     search: "",
     entityFilter: null,
     editingId: null,
@@ -65,6 +66,31 @@
       state.achievements = (achievements.data || []).map(row => row.achievements).filter(Boolean);
       await sb.rpc("touch_profile");
     }
+    render();
+  }
+
+  async function loadPublicProfile(username) {
+    state.publicProfile = { loading: true, username };
+    state.section = "public-profile";
+    render();
+    if (!sb) {
+      state.publicProfile = { error: "A autenticação ainda não foi configurada.", username };
+      render();
+      return;
+    }
+    const profile = await sb.from("profiles").select("id, username, avatar_url, title").ilike("username", username).maybeSingle();
+    if (profile.error || !profile.data) {
+      state.publicProfile = { error: "Perfil não encontrado.", username };
+      render();
+      return;
+    }
+    const favorites = await sb.from("favorites").select("item_id").eq("user_id", profile.data.id);
+    const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", profile.data.id);
+    state.publicProfile = {
+      profile: profile.data,
+      favoriteIds: new Set((favorites.data || []).map(row => row.item_id)),
+      achievements: (achievements.data || []).map(row => row.achievements).filter(Boolean)
+    };
     render();
   }
 
@@ -1896,6 +1922,26 @@
     return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title">${escapeHTML(state.profile.title)}</div>` : ""}<div class="achievement-list">${state.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div></div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div></div><div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
   }
 
+  function renderPublicProfilePage() {
+    const publicState = state.publicProfile;
+    if (!publicState || publicState.loading) return '<div class="content"><div class="empty">Carregando perfil...</div></div>';
+    if (publicState.error) return `<div class="content"><div class="empty">${escapeHTML(publicState.error)}</div></div>`;
+    const profile = publicState.profile;
+    const items = state.db.library.filter(item => publicState.favoriteIds.has(item.id));
+    return `<div class="content public-profile-page">
+      <div class="profile-header">
+        ${profile.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}
+        <div>
+          <div class="eyebrow">@${escapeHTML(profile.username)}</div>
+          ${profile.title ? `<div class="profile-title">${escapeHTML(profile.title)}</div>` : '<div class="section-subtitle">Perfil público</div>'}
+          ${publicState.achievements.length ? `<div class="achievement-list">${publicState.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div>` : ''}
+        </div>
+      </div>
+      <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div>
+      <div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || '<div class="empty">Esta estante ainda está vazia.</div>'}</div>
+    </div>`;
+  }
+
   function renderCatalog(type = null) {
     const items = type ? state.db.library.filter(x => x.type === type) : state.db.library;
     return `
@@ -1959,6 +2005,7 @@
     else if (state.section === "login") main.innerHTML = renderLoginPage();
     else if (state.section === "signup") main.innerHTML = renderSignupPage();
     else if (state.section === "shelf") main.innerHTML = renderShelfPage();
+    else if (state.section === "public-profile") main.innerHTML = renderPublicProfilePage();
     else if (state.section === "password-reset") main.innerHTML = renderPasswordResetPage();
     bind();
     hydrateHomeCovers();
@@ -2028,9 +2075,13 @@
         ? await sb.auth.signUp({ email, password, options: { data: { username: signupUsername } } })
         : await sb.auth.signInWithPassword({ email, password });
       if (result.error) {
-        message.textContent = /database error saving new user/i.test(result.error.message)
-          ? "Não foi possível criar a conta. Verifique se esse usuário já está em uso."
-          : result.error.message;
+        if (mode === "signup" && !providedEmail && /email rate limit exceeded/i.test(result.error.message)) {
+          message.textContent = "O cadastro sem email exige a confirmação de email desativada no Supabase. Desative-a em Authentication > Providers > Email ou informe um email válido.";
+        } else {
+          message.textContent = /database error saving new user/i.test(result.error.message)
+            ? "Não foi possível criar a conta. Verifique se esse usuário já está em uso."
+            : result.error.message;
+        }
         return;
       }
       if (mode === "signup" && !result.data.session) { message.textContent = "Conta criada. Desative a confirmação de email no Supabase para entrar sem email."; return; }
@@ -2414,6 +2465,14 @@
   }
 
   window.BancaDigital = { state, openReader, openAdmin };
+  const pathParts = window.location.pathname.split("/").filter(Boolean);
+  const initialPublicUsername = pathParts.length === 1 && pathParts[0].toLowerCase() !== "index.html"
+    ? cleanUsername(decodeURIComponent(pathParts[0]))
+    : "";
+  if (initialPublicUsername && /^[a-z0-9_]{3,24}$/.test(initialPublicUsername)) {
+    state.section = "public-profile";
+    state.publicProfile = { loading: true, username: initialPublicUsername };
+  }
   render();
   sb?.auth.onAuthStateChange((event, session) => {
     if (event === "PASSWORD_RECOVERY") {
@@ -2422,5 +2481,7 @@
       render();
     }
   });
-  loadAccount().catch(error => console.warn("Supabase indisponível:", error));
+  loadAccount()
+    .then(() => initialPublicUsername && loadPublicProfile(initialPublicUsername))
+    .catch(error => console.warn("Supabase indisponível:", error));
 })();

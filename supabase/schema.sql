@@ -83,6 +83,7 @@ alter table public.user_achievements enable row level security;
 drop policy if exists "profiles are public" on public.profiles;
 drop policy if exists "users update own profile" on public.profiles;
 drop policy if exists "users read own favorites" on public.favorites;
+drop policy if exists "favorites are public" on public.favorites;
 drop policy if exists "users manage own favorites" on public.favorites;
 drop policy if exists "comments are public" on public.comments;
 drop policy if exists "users create own comments" on public.comments;
@@ -94,7 +95,7 @@ drop policy if exists "admins award achievements" on public.user_achievements;
 
 create policy "profiles are public" on public.profiles for select using (true);
 create policy "users update own profile" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
-create policy "users read own favorites" on public.favorites for select using (auth.uid() = user_id);
+create policy "favorites are public" on public.favorites for select using (true);
 create policy "users manage own favorites" on public.favorites for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "comments are public" on public.comments for select using (true);
 create policy "users create own comments" on public.comments for insert with check (auth.uid() = user_id);
