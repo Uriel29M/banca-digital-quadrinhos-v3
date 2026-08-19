@@ -1789,7 +1789,7 @@
   }
 
   function renderLoginPage() {
-    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu @ ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>@usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6"></div><div class="auth-actions"><button type="submit" class="btn btn-danger" data-auth-mode="login">Entrar</button><button type="submit" class="small-btn" data-auth-mode="signup">Criar conta</button></div><button class="link-btn" type="button" data-forgot-password>Esqueci minha senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
+    return `<div class="content auth-page"><div class="auth-card"><div class="eyebrow">Banca Digital</div><h1>Entrar</h1><p class="section-subtitle">Use seu usuário ou email e sua senha para acessar sua estante.</p><form id="auth-form"><div class="field"><label>Usuário ou email</label><input name="username" required placeholder="seu_usuario ou voce@email.com" autocomplete="username"></div><div class="field"><label>Senha</label><input name="password" type="password" required minlength="6" autocomplete="current-password"></div><div class="auth-actions"><button type="submit" class="btn btn-danger" data-auth-mode="login">Entrar</button><button type="submit" class="small-btn" data-auth-mode="signup">Criar conta</button></div><button class="link-btn" type="button" data-forgot-password>Esqueci minha senha</button><div class="auth-message" id="auth-message"></div></form></div></div>`;
   }
 
   function renderPasswordResetPage() {
@@ -1913,18 +1913,25 @@
       const message = $("#auth-message");
       if (!sb) { message.textContent = "A autenticação ainda não foi configurada."; return; }
       if (!identifier.includes("@") && !/^[a-z0-9_]{3,24}$/.test(username)) { message.textContent = "Use de 3 a 24 caracteres: letras, números ou _."; return; }
-      const mode = event.submitter?.dataset.authMode || "login";
-      if (mode === "signup" && identifier.includes("@")) { message.textContent = "Para criar uma conta, use apenas seu @. O email serve para entrar em uma conta já criada."; return; }
+      const mode = event.submitter?.dataset.authMode || event.currentTarget.dataset.authMode || "login";
+      const signupUsername = identifier.includes("@")
+        ? cleanUsername(identifier.split("@")[0]).replace(/[^a-z0-9_]/g, "_").slice(0, 24)
+        : username;
+      if (mode === "signup" && !/^[a-z0-9_]{3,24}$/.test(signupUsername)) { message.textContent = "Não foi possível definir um usuário a partir deste email. Use um usuário de 3 a 24 caracteres."; return; }
+      const email = identifier.includes("@") ? identifier.toLowerCase() : authEmail(username);
       const result = mode === "signup"
-        ? await sb.auth.signUp({ email: authEmail(username), password, options: { data: { username } } })
-        : await sb.auth.signInWithPassword({ email: identifier.includes("@") ? identifier : authEmail(username), password });
+        ? await sb.auth.signUp({ email, password, options: { data: { username: signupUsername } } })
+        : await sb.auth.signInWithPassword({ email, password });
       if (result.error) { message.textContent = result.error.message; return; }
       if (mode === "signup" && !result.data.session) { message.textContent = "Conta criada. Desative a confirmação de email no Supabase para entrar sem email."; return; }
       await loadAccount();
       setSection("shelf");
     });
+    $$('[data-auth-mode]').forEach(button => button.addEventListener("click", () => {
+      $("#auth-form").dataset.authMode = button.dataset.authMode;
+    }));
     $("[data-forgot-password]")?.addEventListener("click", async () => {
-      const email = prompt("Digite o email usado na conta:");
+      const email = prompt("Informe o endereço de email associado à sua conta:");
       if (!email || !sb) return;
       const redirectTo = `${window.location.origin}${window.location.pathname}`;
       const result = await sb.auth.resetPasswordForEmail(email.trim(), { redirectTo });
