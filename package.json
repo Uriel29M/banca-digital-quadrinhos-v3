@@ -1,5 +1,8 @@
 {
   "dependencies": {
     "libarchive.js": "^2.0.2"
+  },
+  "devDependencies": {
+    "supabase": "^2.115.0"
   }
 }
