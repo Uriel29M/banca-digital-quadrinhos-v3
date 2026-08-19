@@ -3,7 +3,7 @@
 
   // --- Inicialização de Bibliotecas ---
   // --- Fim da Inicialização ---
-  const DB_KEY = "bancaDigitalDB_v1";
+  const DB_KEY = `bancaDigitalDB_v1:${window.CATALOG_VERSION || "local"}`;
   const DEFAULT_AVATAR_URL = "https://i.pinimg.com/736x/be/17/10/be1710edaace144c17bdaf6deb2d2cc8.jpg";
 
   const DataStore = {
@@ -60,6 +60,28 @@
   const sb = window.supabase?.createClient && window.BANCA_SUPABASE_URL
     ? window.supabase.createClient(window.BANCA_SUPABASE_URL, window.BANCA_SUPABASE_KEY)
     : null;
+
+  async function publishCatalog() {
+    if (!sb || state.profile?.plan !== "admin") return { skipped: true };
+    const result = await sb.functions.invoke("github-catalog", {
+      body: { library: state.db.library, collections: state.db.collections },
+    });
+    if (result.error) throw new Error(result.error.message || "Não foi possível publicar o catálogo.");
+    if (result.data?.error) throw new Error(result.data.error);
+    return result.data;
+  }
+
+  function saveCatalog(message = "Catálogo salvo.") {
+    save();
+    publishCatalog()
+      .then(result => {
+        if (!result?.skipped) toast(`${message} GitHub atualizado.`);
+      })
+      .catch(error => {
+        console.error("[CATALOG] Falha ao publicar no GitHub:", error);
+        toast(`${message} Mas não foi possível atualizar o GitHub.`);
+      });
+  }
 
   function authEmail(username) {
     return `${String(username).replace(/^@/, '').toLowerCase()}@login.banca-digital.local`;
@@ -2380,7 +2402,7 @@
       if (a === "random") openItem(weightedRandom(uniqueCatalogItems(state.db.library)));
       if (a === "focus-search") { setSection("search"); setTimeout(() => $("#search-input")?.focus(), 30); }
       if (a === "do-search") { state.search = $("#search-input")?.value || ""; render(); $("#search-input")?.focus(); }
-      if (a === "open-admin") { if (canManage) openAdmin(); else toast("A administração é exclusiva para contas premium."); }
+      if (a === "open-admin") { if (canManage) openAdmin(); else toast("A administração é exclusiva para contas admin."); }
       if (a === "open-auth") state.session ? setSection("shelf") : openAuthPage();
       if (a === "logout") signOut();
       if (a === "profile") openProfileSettings();
@@ -2739,7 +2761,7 @@
         cover: String(form.get("cover") || "").trim(),
         issueIds: form.getAll("issueIds")
       });
-      save(); overlay.remove(); render(); toast("Coleção criada.");
+      saveCatalog("Coleção criada."); overlay.remove(); render();
     };
   }
 
@@ -2770,10 +2792,10 @@
     $("[data-achievements]", overlay).onclick = () => { overlay.remove(); openAchievementAdmin(); };
     $("[data-account-plan]", overlay).onclick = () => { overlay.remove(); openAccountPlanAdmin(); };
     $("[data-export]", overlay).onclick = exportDB; $("[data-import]", overlay).onclick = importDB;
-    $("[data-reset]", overlay).onclick = () => { state.db = { library: structuredClone(window.DEFAULT_LIBRARY), collections: structuredClone(window.DEFAULT_COLLECTIONS), submissions: [] }; save(); overlay.remove(); render(); };
+    $("[data-reset]", overlay).onclick = () => { state.db = { library: structuredClone(window.DEFAULT_LIBRARY), collections: structuredClone(window.DEFAULT_COLLECTIONS), submissions: [] }; saveCatalog("Catálogo restaurado."); overlay.remove(); render(); };
     $$('[data-edit]', overlay).forEach(button => button.onclick = () => { overlay.remove(); openEditForm(button.dataset.edit); });
-    $$('[data-delete]', overlay).forEach(button => button.onclick = () => { state.db.library = state.db.library.filter(x => x.id !== button.dataset.delete); state.db.collections.forEach(c => c.issueIds = c.issueIds.filter(id => id !== button.dataset.delete)); save(); overlay.remove(); render(); openAdmin(); });
-    $$('[data-delete-collection]', overlay).forEach(button => button.onclick = () => { state.db.collections = state.db.collections.filter(c => c.id !== button.dataset.deleteCollection); save(); overlay.remove(); openAdmin(); });
+    $$('[data-delete]', overlay).forEach(button => button.onclick = () => { state.db.library = state.db.library.filter(x => x.id !== button.dataset.delete); state.db.collections.forEach(c => c.issueIds = c.issueIds.filter(id => id !== button.dataset.delete)); saveCatalog("Edição excluída."); overlay.remove(); render(); openAdmin(); });
+    $$('[data-delete-collection]', overlay).forEach(button => button.onclick = () => { state.db.collections = state.db.collections.filter(c => c.id !== button.dataset.deleteCollection); saveCatalog("Coleção excluída."); overlay.remove(); openAdmin(); });
   }
 
   function openEditForm(id = null) {
@@ -2797,7 +2819,7 @@
     const syncOneShot = () => { volume.disabled = oneShot.checked; if (oneShot.checked) volume.value = ""; };
     oneShot.addEventListener("change", syncOneShot); syncOneShot();
     source.addEventListener("input", () => preview.textContent = detectFormat(source.value));
-    $("#edit-form", overlay).onsubmit = event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const sourceUrl = String(fd.get("sourceUrl") || "").trim(); const seriesTitle = fd.get("oneShot") === "on" ? "" : String(fd.get("seriesTitle") || "").trim(); const volumeNumber = fd.get("oneShot") === "on" ? "" : String(fd.get("volume") || "").replace(/\D/g, ""); const item = { ...x, title: String(fd.get("title") || "").trim(), seriesTitle, seriesId: seriesTitle ? seriesKey(seriesTitle) : "", issue: volumeNumber, type: fd.get("type"), year: Number(fd.get("year")) || new Date().getFullYear(), publisher: String(fd.get("publisher") || "").trim(), character: String(fd.get("character") || "").trim(), author: String(fd.get("author") || "").trim(), format: detectFormat(sourceUrl), fileUrl: sourceUrl, telegramUrl: "", description: String(fd.get("description") || "").trim(), tags: String(fd.get("tags") || "").split(",").map(s => s.trim()).filter(Boolean), featured: fd.get("featured") === "on" }; delete item.randomWeight; const index = state.db.library.findIndex(i => i.id === item.id); if (index >= 0) state.db.library[index] = item; else state.db.library.push(item); save(); overlay.remove(); render(); toast("Edição salva."); };
+    $("#edit-form", overlay).onsubmit = event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const sourceUrl = String(fd.get("sourceUrl") || "").trim(); const seriesTitle = fd.get("oneShot") === "on" ? "" : String(fd.get("seriesTitle") || "").trim(); const volumeNumber = fd.get("oneShot") === "on" ? "" : String(fd.get("volume") || "").replace(/\D/g, ""); const item = { ...x, title: String(fd.get("title") || "").trim(), seriesTitle, seriesId: seriesTitle ? seriesKey(seriesTitle) : "", issue: volumeNumber, type: fd.get("type"), year: Number(fd.get("year")) || new Date().getFullYear(), publisher: String(fd.get("publisher") || "").trim(), character: String(fd.get("character") || "").trim(), author: String(fd.get("author") || "").trim(), format: detectFormat(sourceUrl), fileUrl: sourceUrl, telegramUrl: "", description: String(fd.get("description") || "").trim(), tags: String(fd.get("tags") || "").split(",").map(s => s.trim()).filter(Boolean), featured: fd.get("featured") === "on" }; delete item.randomWeight; const index = state.db.library.findIndex(i => i.id === item.id); if (index >= 0) state.db.library[index] = item; else state.db.library.push(item); saveCatalog("Edição salva."); overlay.remove(); render(); };
   }
 
   function renderCatalog(type = null) {

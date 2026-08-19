@@ -3,6 +3,8 @@
    ficam no localStorage do navegador. Para produção, troque o DataStore por
    uma API/banco sem precisar reescrever a interface. */
 
+window.CATALOG_VERSION = "local";
+
 window.DEFAULT_LIBRARY = [
   {
     id: "hq-001",

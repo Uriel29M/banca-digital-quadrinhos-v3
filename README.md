@@ -62,7 +62,20 @@ http://localhost:8000
 
 ## Antes de publicar
 
-Este protótipo usa `localStorage`, portanto a administração é local ao navegador. Isso é ótimo para prototipagem, mas não é suficiente para uma banca pública com vários administradores.
+O painel administrativo publica alterações de edições e coleções no arquivo `js/data.js` do GitHub através da Edge Function `github-catalog`. O token do GitHub fica somente nos secrets do Supabase.
+
+Crie um fine-grained token no GitHub com acesso `Contents: Read and write` somente neste repositório e configure:
+
+```text
+supabase secrets set GITHUB_TOKEN=SEU_TOKEN GITHUB_REPOSITORY=Uriel29M/banca-digital-quadrinhos-v3 GITHUB_BRANCH=main GITHUB_CATALOG_PATH=js/data.js
+supabase functions deploy github-catalog
+```
+
+Não coloque o token em `js/supabase.js` nem no código do navegador. O usuário precisa estar autenticado com um perfil cujo plano seja `admin`.
+
+O formulário público de envio continua sendo uma fila local de análise; ele não publica automaticamente conteúdo enviado por leitores.
+
+O catálogo publicado recebe uma nova versão e invalida o catálogo antigo salvo no `localStorage` quando os usuários recarregam o site.
 
 Para a versão online, substitua o DataStore por uma API com banco de dados. Uma estrutura simples seria:
 
