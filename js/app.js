@@ -266,6 +266,7 @@
     result.then(response => { if (response.error) console.warn("Não foi possível atualizar o status de leitura:", response.error.message); });
   }
 
+  const coverMemoryCache = new Map();
   const coverLoading = new Map();
   const coverAbortControllers = new Map();
 
