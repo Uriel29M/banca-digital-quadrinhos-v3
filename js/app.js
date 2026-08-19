@@ -716,7 +716,7 @@
       if (item.local && item.file) {
         pdfData = await item.file.arrayBuffer();
       } else {
-        const response = await fetch(url, {
+        const response = await fetch(proxiedFileUrl(url), {
           method: "GET",
           mode: "cors",
           credentials: "omit",
@@ -974,7 +974,12 @@
     body.innerHTML = `<div class="empty" style="margin:auto">Baixando páginas do CBZ…</div>`;
     try {
       if (!window.JSZip) throw new Error("JSZip não carregou.");
-      const response = await fetch(url);
+      const response = await fetch(proxiedFileUrl(url), {
+        method: "GET",
+        mode: "cors",
+        credentials: "omit",
+        cache: "no-store"
+      });
       if (!response.ok) throw new Error("HTTP " + response.status);
       const buffer = await response.arrayBuffer();
       const zip = await JSZip.loadAsync(buffer);
@@ -1241,8 +1246,10 @@
       status("Baixando CBR…");
 
       console.log("[CBR] URL:", url);
+      const downloadUrl = proxiedFileUrl(url);
+      console.log("[CBR] URL usada no fetch:", downloadUrl);
 
-      const response = await fetch(url, {
+      const response = await fetch(downloadUrl, {
         method: "GET",
         mode: "cors",
         credentials: "omit",
@@ -1250,6 +1257,7 @@
       });
 
       console.log("[CBR] HTTP:", response.status);
+      console.log("[CBR] Content-Type:", response.headers.get("content-type") || "desconhecido");
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -1274,6 +1282,11 @@
       }
 
       const bytes = new Uint8Array(buffer);
+
+      const preview = new TextDecoder().decode(bytes.slice(0, 128)).trimStart().toLowerCase();
+      if (preview.startsWith("<!doctype html") || preview.startsWith("<html") || preview.startsWith("<head")) {
+        throw new Error("CBR_HTML_RESPONSE");
+      }
 
       const isRAR5 =
         bytes[0] === 0x52 &&
@@ -1309,9 +1322,7 @@
       } else if (rarVersion === "RAR4") {
         status("RAR4 detectado. Preparando leitor…");
       } else {
-        throw new Error( // Use the fail function here
-          "O arquivo não possui uma assinatura RAR válida."
-        );
+        throw new Error("CBR_INVALID_SIGNATURE");
       }
 
       // =========================================================
@@ -1848,6 +1859,20 @@
           "O arquivo baixado não contém dados suficientes."
         );
 
+      } else if (errorText.includes("CBR_HTML_RESPONSE")) {
+
+        fail(
+          "O MediaFire não entregou o CBR.",
+          "O servidor devolveu uma página HTML em vez do arquivo. Confirme o link permanente do MediaFire e se a Edge Function mediafire-proxy foi publicada."
+        );
+
+      } else if (errorText.includes("CBR_INVALID_SIGNATURE")) {
+
+        fail(
+          "Arquivo CBR inválido.",
+          "O download terminou, mas o conteúdo não possui assinatura RAR. Verifique o link e o Content-Type exibidos no console."
+        );
+
       } else if (
         errorText.includes(
           "Failed to fetch"
@@ -1914,6 +1939,22 @@
     return /^https?:\/\//i.test(url) || url ? url : "";
   }
 
+  function proxiedFileUrl(url) {
+    const source = String(url || "");
+    let parsed;
+    try { parsed = new URL(source); } catch { return source; }
+    const host = parsed.hostname.toLowerCase();
+    const isMediaFire = parsed.protocol === "https:" && (
+      host === "mediafire.com" ||
+      host === "www.mediafire.com" ||
+      /^download\d+\.mediafire\.com$/.test(host)
+    );
+    if (!isMediaFire || !window.BANCA_SUPABASE_URL) return source;
+    const proxy = new URL(`${window.BANCA_SUPABASE_URL}/functions/v1/mediafire-proxy`);
+    proxy.searchParams.set("url", source);
+    return proxy.toString();
+  }
+
   async function imageBlobToDataUrl(blob, maxWidth = 360) {
     if (!(blob instanceof Blob)) blob = new Blob([blob]);
     const bitmap = await createImageBitmap(blob);
@@ -1937,7 +1978,7 @@
   }
 
   async function pdfCover(url, signal) {
-    const response = await fetch(url, { mode: "cors", credentials: "omit", cache: "no-store", signal });
+    const response = await fetch(proxiedFileUrl(url), { mode: "cors", credentials: "omit", cache: "no-store", signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(await response.arrayBuffer()) }).promise;
     const page = await pdf.getPage(1);
@@ -1950,7 +1991,7 @@
   }
 
   async function cbzCover(url, signal) {
-    const response = await fetch(url, { mode: "cors", credentials: "omit", cache: "no-store", signal });
+    const response = await fetch(proxiedFileUrl(url), { mode: "cors", credentials: "omit", cache: "no-store", signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const zip = await JSZip.loadAsync(await response.arrayBuffer());
     const name = Object.keys(zip.files)
@@ -1961,7 +2002,7 @@
   }
 
   async function cbrCover(url, signal) {
-    const response = await fetch(url, { mode: "cors", credentials: "omit", cache: "no-store", signal });
+    const response = await fetch(proxiedFileUrl(url), { mode: "cors", credentials: "omit", cache: "no-store", signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const module = await import(appAssetUrl("libarchive/libarchive.js"));
     const Archive = module.Archive;

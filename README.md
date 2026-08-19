@@ -36,6 +36,18 @@ Se o servidor não permitir CORS:
 - PDF: o navegador ainda pode abrir o arquivo em outra aba;
 - CBZ: o leitor JS não consegue baixar o ZIP para extrair as páginas.
 
+## Proxy MediaFire
+
+O leitor encaminha URLs HTTPS do MediaFire para a Edge Function `mediafire-proxy` do Supabase. A função permite apenas hosts MediaFire, segue os redirecionamentos do download e devolve o arquivo com CORS. Arquivos locais e URLs de outros provedores continuam seguindo o fluxo original.
+
+Prefira cadastrar a URL permanente da página do MediaFire, no formato `https://www.mediafire.com/file/...`. URLs diretas de download MediaFire também são aceitas, embora possam expirar.
+
+Para publicar a função, configure o projeto Supabase e execute:
+
+supabase functions deploy mediafire-proxy --no-verify-jwt
+
+O limite atual do proxy é de 512 MB. O leitor ainda carrega o arquivo inteiro na memória do navegador e não armazena os quadrinhos no Storage do Supabase.
+
 ## Rodar
 
 Por ser JavaScript no navegador, é melhor abrir com um servidor local em vez de `file://`.
