@@ -171,6 +171,7 @@ main { min-height: calc(100vh - 150px); }
   aspect-ratio: 2 / 3;
   background: #202025 center/cover no-repeat;
   position: relative;
+  transition: background-image .25s ease;
 }
 .cover-number {
   position: absolute; top: 9px; left: 9px;

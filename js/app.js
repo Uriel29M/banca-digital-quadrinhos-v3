@@ -39,7 +39,8 @@
     profile: null,
     favoriteIds: new Set(),
     achievements: [],
-    localBoxFiles: []
+    localBoxFiles: [],
+    localBoxVisible: false
   };
 
   const sb = window.supabase?.createClient && window.BANCA_SUPABASE_URL
@@ -110,6 +111,7 @@
   async function signOut() {
     await sb?.auth.signOut();
     clearLocalBox();
+    state.localBoxVisible = false;
     state.session = null; state.profile = null; state.favoriteIds = new Set(); state.achievements = [];
     state.section = "home"; render(); toast("Você saiu da conta.");
   }
@@ -121,12 +123,12 @@
 
   function localFileFrom(file) {
     const name = file.name.replace(/\\/g, "/").split("/").pop();
-    const title = name.replace(/\\.(pdf|cbz|cbr|jpg|jpeg|png|webp|gif)$/i, "");
+    const title = name.replace(/\.(pdf|cbz|cbr|jpg|jpeg|png|webp|gif)$/i, "");
     return { id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`, title, issue: "", type: "comic", year: "", format: extension(name), file, fileUrl: URL.createObjectURL(file), local: true, clicks: 0 };
   }
 
   function supportedLocalFile(file) {
-    return /\\.(pdf|cbz|cbr|jpg|jpeg|png|webp|gif)$/i.test(file.name);
+    return /\.(pdf|cbz|cbr|jpg|jpeg|png|webp|gif)$/i.test(file.name);
   }
 
   function openLocalFile(file, keepInBox = false) {
@@ -1764,13 +1766,19 @@
     }
   }
 
+  function instantCover(item) {
+    const title = String(item?.title || "HQ").slice(0, 34);
+    const safeTitle = title.replace(/[<>&\"']/g, "");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="540" viewBox="0 0 360 540"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#29232a"/><stop offset="1" stop-color="#111114"/></linearGradient></defs><rect width="360" height="540" fill="url(#g)"/><path d="M-20 430L380 80V210L-20 560Z" fill="#e50914" opacity=".72"/><text x="28" y="62" fill="#ff5962" font-family="Arial,sans-serif" font-size="13" font-weight="700" letter-spacing="3">BANCA DIGITAL</text><text x="28" y="285" fill="white" font-family="Arial,sans-serif" font-size="27" font-weight="700">${safeTitle}</text><text x="28" y="510" fill="#d2d2d5" font-family="Arial,sans-serif" font-size="12">Carregando capa…</text></svg>`;
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+  }
+
   function coverFor(item) {
-    // In production, /api/works/:id/cover should render the first page/image
-    // from the Telegram-hosted file. No separate cover upload is necessary.
-    if (!item) return "https://placehold.co/600x900/202025/fff?text=HQ";
+    // A capa local aparece imediatamente; a capa real substitui-a quando terminar de carregar.
+    if (!item) return instantCover({ title: "HQ" });
     if (item.coverUrl) return item.coverUrl;
     if (item.cover) return item.cover; // backward compatibility
-    return "https://placehold.co/600x900/202025/fff?text=" + encodeURIComponent(item.title || "HQ");
+    return instantCover(item);
   }
 
   function coverCacheKey(item) {
@@ -2015,7 +2023,7 @@
   function renderShelfPage() {
     if (!state.session) return renderLoginPage();
     const items = state.db.library.filter(item => state.favoriteIds.has(item.id));
-    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title">${escapeHTML(state.profile.title)}</div>` : ""}<div class="achievement-list">${state.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div></div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-section="local-box">Minha caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
+    return `<div class="content"><div class="profile-header">${state.profile?.avatar_url ? `<img class="profile-avatar" src="${escapeHTML(state.profile.avatar_url)}" alt="">` : '<div class="profile-avatar profile-avatar-empty">@</div>'}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title">${escapeHTML(state.profile.title)}</div>` : ""}<div class="achievement-list">${state.achievements.map(a => `<span title="${escapeHTML(a.description || "")}">${escapeHTML(a.icon || "★")} ${escapeHTML(a.name)}</span>`).join("")}</div></div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(card).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
   }
 
   function renderPublicProfilePage() {
@@ -2120,7 +2128,7 @@
     const isAdmin = state.profile?.plan === "admin";
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
     $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
-    $$('.local-box-nav').forEach(button => { button.style.display = state.session ? "" : "none"; });
+    $$('.local-box-nav').forEach(button => { button.style.display = state.session && state.localBoxVisible ? "" : "none"; });
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
       const item = state.db.library.find(x => x.id === el.dataset.open);
@@ -2141,6 +2149,7 @@
       if (a === "logout") signOut();
       if (a === "profile") openProfileSettings();
       if (a === "submit") { if (isAdmin) openSubmission(); else toast("O envio de quadrinhos é exclusivo para administradores."); }
+      if (a === "open-local-box") { state.localBoxVisible = true; setSection("local-box"); }
     }));
     $$("[data-collection]").forEach(el => el.addEventListener("click", () => openCollection(el.dataset.collection)));
     if ($('[data-action="clear-local-box"]')) $('[data-action="clear-local-box"]').onclick = () => { clearLocalBox(); render(); toast("Minha caixa foi limpa."); };
@@ -2314,14 +2323,11 @@
     $("[data-export]", overlay).onclick = exportDB;
     $("[data-import]", overlay).onclick = importDB;
     $("[data-reset]", overlay).onclick = () => {
-      if (confirm("Restaurar os dados de exemplo? Isso apaga as edições locais.")) {
-        state.db = {library:structuredClone(window.DEFAULT_LIBRARY), collections:structuredClone(window.DEFAULT_COLLECTIONS), submissions:[]};
-        save(); overlay.remove(); render(); toast("Catálogo restaurado.");
-      }
+      state.db = {library:structuredClone(window.DEFAULT_LIBRARY), collections:structuredClone(window.DEFAULT_COLLECTIONS), submissions:[]};
+      save(); overlay.remove(); render(); toast("Catálogo restaurado.");
     };
     $$("[data-edit]", overlay).forEach(b => b.onclick = () => { overlay.remove(); openEditForm(b.dataset.edit); });
     $$("[data-delete]", overlay).forEach(b => b.onclick = () => {
-      if (!confirm("Excluir esta edição?")) return;
       state.db.library = state.db.library.filter(x => x.id !== b.dataset.delete);
       state.db.collections.forEach(c => c.issueIds = c.issueIds.filter(i => i !== b.dataset.delete));
       save(); overlay.remove(); render(); openAdmin(); toast("Edição excluída.");
@@ -2527,10 +2533,10 @@
     $("[data-new-collection]", overlay).onclick = () => { overlay.remove(); openCollectionForm(); };
     $("[data-achievements]", overlay).onclick = () => { overlay.remove(); openAchievementAdmin(); };
     $("[data-export]", overlay).onclick = exportDB; $("[data-import]", overlay).onclick = importDB;
-    $("[data-reset]", overlay).onclick = () => { if (confirm("Restaurar o catálogo de exemplo?")) { state.db = { library: structuredClone(window.DEFAULT_LIBRARY), collections: structuredClone(window.DEFAULT_COLLECTIONS), submissions: [] }; save(); overlay.remove(); render(); } };
+    $("[data-reset]", overlay).onclick = () => { state.db = { library: structuredClone(window.DEFAULT_LIBRARY), collections: structuredClone(window.DEFAULT_COLLECTIONS), submissions: [] }; save(); overlay.remove(); render(); };
     $$('[data-edit]', overlay).forEach(button => button.onclick = () => { overlay.remove(); openEditForm(button.dataset.edit); });
-    $$('[data-delete]', overlay).forEach(button => button.onclick = () => { if (!confirm("Excluir esta edição?")) return; state.db.library = state.db.library.filter(x => x.id !== button.dataset.delete); state.db.collections.forEach(c => c.issueIds = c.issueIds.filter(id => id !== button.dataset.delete)); save(); overlay.remove(); render(); openAdmin(); });
-    $$('[data-delete-collection]', overlay).forEach(button => button.onclick = () => { if (!confirm("Excluir esta coleção?")) return; state.db.collections = state.db.collections.filter(c => c.id !== button.dataset.deleteCollection); save(); overlay.remove(); openAdmin(); });
+    $$('[data-delete]', overlay).forEach(button => button.onclick = () => { state.db.library = state.db.library.filter(x => x.id !== button.dataset.delete); state.db.collections.forEach(c => c.issueIds = c.issueIds.filter(id => id !== button.dataset.delete)); save(); overlay.remove(); render(); openAdmin(); });
+    $$('[data-delete-collection]', overlay).forEach(button => button.onclick = () => { state.db.collections = state.db.collections.filter(c => c.id !== button.dataset.deleteCollection); save(); overlay.remove(); openAdmin(); });
   }
 
   function openEditForm(id = null) {
