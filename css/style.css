@@ -395,7 +395,7 @@ main { min-height: calc(100vh - 150px); }
 .local-upload-card input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .local-upload-icon { color: var(--accent-2); font-size: 27px; font-weight: 800; }
 .local-file-card { cursor: pointer; }
-.local-file-cover { display: grid; place-items: center; background: linear-gradient(145deg, #29232a, #151519); }
+.local-file-cover { display: grid; place-items: center; background-color: #18151b; background-position: center; background-size: cover; background-repeat: no-repeat; }
 .local-file-icon { color: #ff5962; font-size: 48px; }
 
 .admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }

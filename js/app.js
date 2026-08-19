@@ -513,7 +513,11 @@
       return;
     }
 
-    const format = (item.format || extension(resolvedUrl)).toLowerCase();
+    const itemFormat = String(item.format || "").toLowerCase();
+    const fileFormat = extension(item.file?.name || item.name || "");
+    const format = /^(pdf|cbz|cbr|jpg|jpeg|png|webp|gif)$/.test(itemFormat)
+      ? itemFormat
+      : (fileFormat || extension(resolvedUrl)).toLowerCase();
     const skipCover = options.skipCover === true;
     const savedProgress = progressFor(item);
     const resumePage = savedProgress?.page || (skipCover ? 2 : 1);
@@ -658,7 +662,8 @@
 
   function extension(url) {
     const clean = String(url || "").split("?")[0].split("#")[0];
-    return clean.includes(".") ? clean.split(".").pop().toLowerCase() : "";
+    const filename = clean.split(/[\\/]/).pop();
+    return /^[^.]+\.[a-z0-9]{1,8}$/i.test(filename) ? filename.split(".").pop().toLowerCase() : "";
   }
 
   async function renderPDFReader(item, url, body, controls, overlay, skipCover = false, resumePage = 1, onPageChange = () => {}) {
