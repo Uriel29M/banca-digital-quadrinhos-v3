@@ -283,9 +283,15 @@
 
   async function attachComments(item, overlay) {
     if (!sb) return;
-    const panel = document.createElement("section");
+    const panel = document.createElement("details");
     panel.className = "reader-comments";
     panel.innerHTML = `<div class="section-head"><h3>Comentários</h3></div><div class="comments-list"><span class="section-subtitle">Carregando...</span></div>${state.session ? '<form class="comment-form"><textarea name="body" maxlength="1000" required placeholder="Escreva um comentário..."></textarea><button class="small-btn">Comentar</button></form>' : '<p class="section-subtitle">Entre para comentar.</p>'}`;
+    const summary = document.createElement("summary");
+    summary.textContent = "Comentários";
+    const content = document.createElement("div");
+    content.className = "comments-content";
+    while (panel.firstChild) content.appendChild(panel.firstChild);
+    panel.append(summary, content);
     overlay.appendChild(panel);
     const list = $(".comments-list", panel);
     const refresh = async () => {
@@ -293,7 +299,19 @@
       list.innerHTML = (result.data || []).map(comment => `<article class="comment"><b>@${escapeHTML(comment.profiles?.username || "usuário")}</b>${comment.profiles?.title ? `<span class="comment-title">${escapeHTML(comment.profiles.title)}</span>` : ""}<p>${escapeHTML(comment.body)}</p></article>`).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
     };
     await refresh();
-    $(".comment-form", panel)?.addEventListener("submit", async event => { event.preventDefault(); const body = String(new FormData(event.currentTarget).get("body") || "").trim(); if (!body) return; await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body }); event.currentTarget.reset(); await refresh(); });
+    $(".comment-form", panel)?.addEventListener("submit", async event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const form = event.currentTarget;
+      const body = String(new FormData(form).get("body") || "").trim();
+      const button = $("button[type=\"submit\"]", form);
+      if (!body) return;
+      button.disabled = true;
+      const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
+      if (result.error) toast(result.error.message);
+      else { form.reset(); await refresh(); }
+      button.disabled = false;
+    });
   }
 
   function openProfileSettings() {
@@ -311,12 +329,16 @@
     $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const update = await sb.from("profiles").update({ username, avatar_url }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url }; overlay.remove(); render(); toast("Perfil atualizado."); };
     $("#profile-form", overlay).addEventListener("submit", async event => {
       const email = String(new FormData(event.currentTarget).get("email") || "").trim().toLowerCase();
-      if (!email || email === currentEmail) return;
+      if (!email) return;
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast("Informe um email válido.");
-      const result = await sb.auth.updateUser({ email });
-      if (result.error) return toast(result.error.message);
+      if (email !== currentEmail) {
+        const result = await sb.auth.updateUser({ email });
+        if (result.error) return toast(result.error.message);
+      }
+      const profileEmail = await sb.from("profiles").update({ account_email: email }).eq("id", state.session.user.id);
+      if (profileEmail.error) return toast(profileEmail.error.message);
       state.session.user.email = email;
-      toast("Email atualizado. Verifique sua caixa de entrada para confirmar o endereço.");
+      toast(email === currentEmail ? "Email de recuperação salvo." : "Email atualizado. Verifique sua caixa de entrada para confirmar o endereço.");
     });
   }
 
@@ -1993,11 +2015,24 @@
         ? cleanUsername(identifier.split("@")[0]).replace(/[^a-z0-9_]/g, "_").slice(0, 24)
         : username;
       if (mode === "signup" && !/^[a-z0-9_]{3,24}$/.test(signupUsername)) { message.textContent = "Não foi possível definir um usuário a partir deste email. Use um usuário de 3 a 24 caracteres."; return; }
-      const email = mode === "signup" ? (providedEmail || authEmail(username)) : (identifier.includes("@") ? identifier.toLowerCase() : authEmail(username));
+      if (mode === "signup") {
+        const existing = await sb.from("profiles").select("id").eq("username", signupUsername).maybeSingle();
+        if (existing.data) { message.textContent = "Esse usuário já está em uso. Escolha outro."; return; }
+      }
+      let email = mode === "signup" ? (providedEmail || authEmail(username)) : (identifier.includes("@") ? identifier.toLowerCase() : authEmail(username));
+      if (mode === "login" && !identifier.includes("@")) {
+        const lookup = await sb.rpc("get_login_email", { p_username: username });
+        if (lookup.data) email = lookup.data;
+      }
       const result = mode === "signup"
         ? await sb.auth.signUp({ email, password, options: { data: { username: signupUsername } } })
         : await sb.auth.signInWithPassword({ email, password });
-      if (result.error) { message.textContent = result.error.message; return; }
+      if (result.error) {
+        message.textContent = /database error saving new user/i.test(result.error.message)
+          ? "Não foi possível criar a conta. Verifique se esse usuário já está em uso."
+          : result.error.message;
+        return;
+      }
       if (mode === "signup" && !result.data.session) { message.textContent = "Conta criada. Desative a confirmação de email no Supabase para entrar sem email."; return; }
       await loadAccount();
       setSection("shelf");

@@ -2,12 +2,16 @@
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   username text not null unique check (username ~ '^[A-Za-z0-9_]{3,24}$'),
+  account_email text unique,
   avatar_url text,
   plan text not null default 'free' check (plan in ('free', 'premium', 'admin')),
   title text,
   last_seen_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
+
+alter table public.profiles add column if not exists account_email text;
+create unique index if not exists profiles_account_email_key on public.profiles(account_email) where account_email is not null;
 
 create table if not exists public.favorites (
   user_id uuid not null references public.profiles(id) on delete cascade,
@@ -55,8 +59,8 @@ create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public
 as $$
 begin
-  insert into public.profiles (id, username)
-  values (new.id, coalesce(new.raw_user_meta_data->>'username', 'user_' || substr(new.id::text, 1, 8)));
+  insert into public.profiles (id, username, account_email)
+  values (new.id, coalesce(new.raw_user_meta_data->>'username', 'user_' || substr(new.id::text, 1, 8)), new.email);
   return new;
 end;
 $$;
@@ -64,6 +68,11 @@ $$;
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users
 for each row execute procedure public.handle_new_user();
+
+create or replace function public.get_login_email(p_username text)
+returns text language sql security definer set search_path = public
+as $$ select account_email from public.profiles where lower(username) = lower(p_username) limit 1 $$;
+grant execute on function public.get_login_email(text) to anon, authenticated;
 
 alter table public.profiles enable row level security;
 alter table public.favorites enable row level security;
