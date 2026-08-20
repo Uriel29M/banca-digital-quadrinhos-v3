@@ -147,6 +147,9 @@
     followerCount: 0,
     followingCount: 0,
     chatContact: null,
+    notifications: [],
+    notificationUnreadCount: 0,
+    notificationChannel: null,
     localBoxFiles: [],
     localBoxVisible: false,
     publisherSettings: new Map(),
@@ -161,6 +164,7 @@
     home: "",
     comic: "quadrinhos",
     collections: "colecoes",
+    notifications: "notificacoes",
     search: "pesquisar",
     shelf: "estante",
     "local-box": "caixa",
@@ -367,8 +371,31 @@
       state.achievements = (achievements.data || []).map(row => row.achievements).filter(Boolean);
       await sb.rpc("touch_profile");
     }
+    await loadNotifications();
     state.authReady = true;
     render();
+  }
+
+  async function loadNotifications() {
+    state.notificationChannel?.unsubscribe?.();
+    state.notificationChannel = null;
+    if (!sb || !state.session?.user?.id) {
+      state.notifications = [];
+      state.notificationUnreadCount = 0;
+      return;
+    }
+    const result = await sb.from("notifications").select("id, actor_id, type, title, body, href, metadata, read_at, created_at").eq("user_id", state.session.user.id).order("created_at", { ascending: false }).limit(100);
+    if (result.error) {
+      state.notifications = [];
+      state.notificationUnreadCount = 0;
+      return;
+    }
+    state.notifications = result.data || [];
+    state.notificationUnreadCount = state.notifications.filter(notification => !notification.read_at).length;
+    state.notificationChannel = sb.channel("notifications-" + state.session.user.id).on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: "user_id=eq." + state.session.user.id }, async () => {
+      await loadNotifications();
+      render();
+    }).subscribe();
   }
 
   async function loadPublicProfile(username, collectionId = null) {
@@ -425,9 +452,13 @@
 
   async function signOut() {
     await sb?.auth.signOut();
+    state.notificationChannel?.unsubscribe?.();
+    state.notificationChannel = null;
     clearLocalBox();
     state.localBoxVisible = false;
     state.session = null; state.profile = null; state.favoriteIds = new Set(); state.readingProgress = new Map(); state.shelfSnapshot = null; state.shelfCategories = []; state.comicLikeIds = new Set(); state.achievements = []; state.achievementChecks = new Set();
+    state.notifications = [];
+    state.notificationUnreadCount = 0;
     state.section = "home"; render(); toast("Você saiu da conta.");
   }
 
@@ -3023,7 +3054,7 @@
     if (contact?.id === state.session.user.id) return toast("Você não pode enviar mensagens para si mesmo.");
     const overlay = document.createElement("div");
     overlay.className = "modal-backdrop";
-    overlay.innerHTML = `<div class="modal chat-modal"><div class="section-head"><div><h2>Mensagens</h2><div class="section-subtitle">As mensagens desaparecem após 24 horas.</div></div><button class="small-btn" data-close>Fechar</button></div><div class="chat-contact-picker">${contact ? `<div class="chat-contact-selected">Conversando com <b>@${escapeHTML(contact.username)}</b></div>` : `<form id="chat-contact-form"><input name="username" required placeholder="Nome de usuário"><button class="small-btn">Abrir conversa</button></form>`}</div>${contact ? `<div class="chat-messages" data-chat-messages><div class="empty">Carregando mensagens...</div></div><form class="chat-compose" id="chat-compose"><textarea name="body" maxlength="2000" rows="2" required placeholder="Escreva uma mensagem"></textarea><button class="btn btn-danger">Enviar</button></form>` : `<div class="notice">Abra o perfil de um usuário e clique em “Enviar mensagem”, ou pesquise o nome de usuário acima.</div>`}</div>`;
+    overlay.innerHTML = `<div class="modal chat-modal"><div class="section-head"><div><h2>Mensagens</h2><div class="section-subtitle">As mensagens desaparecem após 24 horas.</div></div><button class="small-btn" data-close>Fechar</button></div><div class="chat-contact-picker">${contact ? `<div class="chat-contact-selected">Conversando com <b>@${escapeHTML(contact.username)}</b></div>` : `<form id="chat-contact-form"><input name="username" required placeholder="Nome de usuário"><button type="submit" class="small-btn">Abrir conversa</button></form>`}</div>${contact ? `<div class="chat-messages" data-chat-messages><div class="empty">Carregando mensagens...</div></div><form class="chat-compose" id="chat-compose"><textarea name="body" maxlength="2000" rows="2" required placeholder="Escreva uma mensagem"></textarea><button type="submit" class="btn btn-danger">Enviar</button></form>` : `<div class="notice">Abra o perfil de um usuário e clique em “Enviar mensagem”, ou pesquise o nome de usuário acima.</div>`}</div>`;
     $("#modal-root").appendChild(overlay);
     const close = () => { channel?.unsubscribe(); overlay.remove(); };
     $("[data-close]", overlay).onclick = close;
@@ -3055,10 +3086,21 @@
       const form = new FormData(event.currentTarget);
       const body = String(form.get("body") || "").trim();
       if (!body) return;
-      const result = await sb.from("chat_messages").insert({ sender_id: state.session.user.id, recipient_id: contact.id, body, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
-      if (result.error) return toast("Não foi possível enviar a mensagem.");
+      const submitButton = $("button[type=submit]", event.currentTarget);
+      if (!submitButton || submitButton.disabled) return;
+      submitButton.disabled = true;
+      const optimisticId = `chat-pending-${Date.now()}`;
+      messagesRoot.insertAdjacentHTML("beforeend", `<div class="chat-message is-mine chat-message-pending" data-chat-pending="${optimisticId}"><div>${escapeHTML(body)}</div><small>Enviando…</small></div>`);
       event.currentTarget.reset();
+      messagesRoot.scrollTop = messagesRoot.scrollHeight;
+      const result = await sb.from("chat_messages").insert({ sender_id: state.session.user.id, recipient_id: contact.id, body, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
+      if (result.error) {
+        $(`[data-chat-pending="${optimisticId}"]`, messagesRoot)?.remove();
+        submitButton.disabled = false;
+        return toast("Não foi possível enviar a mensagem.");
+      }
       await renderMessages();
+      submitButton.disabled = false;
     };
   }
 
@@ -3362,6 +3404,34 @@
     return `<div class="content"><div class="section-head"><div><div class="eyebrow">Coleção</div><h1 class="section-title">${escapeHTML(collection.title)}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div><button class="small-btn" data-section="collections">Voltar às coleções</button></div><p class="section-subtitle">${escapeHTML(collection.description || "")}</p><div class="results-grid">${items.map(item => card(item)).join("") || '<div class="empty">Coleção vazia.</div>'}</div></div>`;
   }
 
+  async function markNotificationRead(notificationId) {
+    const notification = state.notifications.find(item => String(item.id) === String(notificationId));
+    if (!notification || notification.read_at || !sb || !state.session) return;
+    const result = await sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("id", notification.id).eq("user_id", state.session.user.id);
+    if (result.error) return toast("Não foi possível marcar a notificação como lida.");
+    notification.read_at = new Date().toISOString();
+    state.notificationUnreadCount = Math.max(0, state.notificationUnreadCount - 1);
+    render();
+  }
+
+  async function markAllNotificationsRead() {
+    if (!sb || !state.session || !state.notificationUnreadCount) return;
+    const result = await sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", state.session.user.id).is("read_at", null);
+    if (result.error) return toast("Não foi possível marcar as notificações.");
+    state.notifications.forEach(notification => { notification.read_at ||= new Date().toISOString(); });
+    state.notificationUnreadCount = 0;
+    render();
+  }
+
+  function notificationIcon(type) {
+    return ({ achievement: "🏆", moderation: "⚖", plan: "★", message: "✉", follow: "♥", collection_like: "♥", comment_reply: "↩", comment_like: "♥", mention: "@", announcement: "!" }[type] || "•");
+  }
+
+  function renderNotifications() {
+    if (!state.session) return renderLoginPage();
+    return `<div class="content notifications-page"><div class="section-head"><div><div class="eyebrow">Central da conta</div><h1 class="section-title">Notificações</h1><div class="section-subtitle">${state.notificationUnreadCount} não lida(s)</div></div><button class="small-btn" data-mark-all-notifications>Marcar todas como lidas</button></div><div class="notification-list">${state.notifications.map(notification => `<button class="notification-item ${notification.read_at ? "" : "is-unread"}" type="button" data-notification-open="${escapeHTML(notification.id)}"><span class="notification-icon">${notificationIcon(notification.type)}</span><span class="notification-copy"><strong>${escapeHTML(notification.title)}</strong><span>${escapeHTML(notification.body)}</span><small>${escapeHTML(formatCommentDate(notification.created_at))}</small></span></button>`).join("") || '<div class="empty">Você ainda não recebeu notificações.</div>'}</div></div>`;
+  }
+
   function render() {
     const main = $("#main");
     let markup = "";
@@ -3375,6 +3445,7 @@
     else if (state.section === "login") markup = renderLoginPage();
     else if (state.section === "signup") markup = renderSignupPage();
     else if (state.section === "shelf") markup = renderShelfPage();
+    else if (state.section === "notifications") markup = renderNotifications();
     else if (state.section === "local-box") markup = renderLocalBoxPage();
     else if (state.section === "public-profile") markup = renderPublicProfilePage();
     else if (state.section === "password-reset") markup = renderPasswordResetPage();
@@ -3466,12 +3537,18 @@
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
     $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
     $$('.messages-nav').forEach(button => { button.style.display = state.session ? "" : "none"; });
+    $$('.notifications-nav').forEach(button => {
+      button.style.display = state.session ? "" : "none";
+      button.textContent = state.notificationUnreadCount ? "Notificações (" + state.notificationUnreadCount + ")" : "Notificações";
+    });
     $$('.local-box-nav').forEach(button => { button.style.display = state.session && state.localBoxVisible ? "" : "none"; });
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
     $$('[data-like-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleComicLike(el.dataset.likeItem); }));
     $$('[data-share-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); shareComic(el.dataset.shareItem); }));
     $$('[data-publisher]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openEntityPage("publisher", el.dataset.publisher); }));
     $$('[data-follow-list]').forEach(el => el.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); openFollowList(el.dataset.followList, el.dataset.followProfileId); }));
+    $$('[data-notification-open]').forEach(el => el.addEventListener("click", () => markNotificationRead(el.dataset.notificationOpen)));
+    $('[data-mark-all-notifications]')?.addEventListener("click", markAllNotificationsRead);
     if (state.section === "public-profile" && state.publicProfile?.profile && state.session?.user?.id !== state.publicProfile.profile.id && !$("[data-open-chat]")) {
       const actions = $(".public-profile-page > .section-head .profile-actions");
       if (actions) { const button = document.createElement("button"); button.className = "small-btn"; button.dataset.openChat = "true"; button.textContent = "Enviar mensagem"; actions.prepend(button); }
@@ -3923,6 +4000,23 @@
   }
 
   // Nova versão do painel: mantém os dados antigos, mas cadastra séries e metadados novos.
+  function openAdminNotificationForm() {
+    if (!sb || state.profile?.plan !== "admin") return toast("Apenas administradores podem enviar notificações.");
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = '<div class="modal"><div class="section-head"><div><h2>Enviar notificação geral</h2><div class="section-subtitle">A mensagem será enviada para todos os usuários.</div></div><button class="small-btn" data-close>Fechar</button></div><form id="admin-notification-form"><div class="field"><label>Título</label><input name="title" maxlength="120" required placeholder="Ex.: Novidade na banca"></div><div class="field"><label>Mensagem</label><textarea name="body" maxlength="500" required placeholder="Escreva o aviso..."></textarea></div><div class="field"><label>Tipo</label><select name="type"><option value="announcement">Aviso</option><option value="event">Evento</option><option value="maintenance">Manutenção</option></select></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button type="submit" class="btn btn-danger">Enviar para todos</button></div></form></div>';
+    $("#modal-root").appendChild(overlay);
+    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $("#admin-notification-form", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const result = await sb.rpc("send_notification_to_all", { p_title: String(form.get("title") || "").trim(), p_body: String(form.get("body") || "").trim(), p_type: String(form.get("type") || "announcement") });
+      if (result.error) return toast(result.error.message || "Não foi possível enviar a notificação.");
+      overlay.remove();
+      toast("Notificação enviada para " + (result.data || 0) + " usuário(s).");
+    };
+  }
+
   function openAdmin(editId = null) {
     cancelCoverLoads();
     const overlay = document.createElement("div");
@@ -3943,6 +4037,11 @@
       </div>`;
     $("#modal-root").appendChild(overlay);
     const closeAdmin = event => { event?.preventDefault(); event?.stopPropagation(); overlay.remove(); hydrateHomeCovers(); };
+    const notificationButton = document.createElement("button");
+    notificationButton.className = "small-btn";
+    notificationButton.textContent = "Enviar notificação";
+    $(".admin-actions", overlay)?.appendChild(notificationButton);
+    notificationButton.onclick = () => { overlay.remove(); openAdminNotificationForm(); };
     $("[data-close]", overlay).onclick = closeAdmin;
     $("[data-new]", overlay).onclick = () => { overlay.remove(); openEditForm(); };
     $("[data-new-collection]", overlay).onclick = () => { overlay.remove(); openCollectionForm(); };
