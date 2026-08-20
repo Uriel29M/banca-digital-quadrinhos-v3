@@ -161,7 +161,8 @@
     blogOpenId: null,
     blogLikeIds: new Set(),
     blogLikeCounts: new Map(),
-    blogCommentCounts: new Map()
+    blogCommentCounts: new Map(),
+    blogEditorRange: null
   };
 
   let activeReaderCleanup = null;
@@ -281,13 +282,15 @@
   function safeBlogHtml(value = "") {
     const template = document.createElement("template");
     template.innerHTML = String(value || "");
-    const allowed = new Set(["B", "STRONG", "I", "EM", "U", "S", "H2", "H3", "P", "BR", "BLOCKQUOTE", "UL", "OL", "LI", "A"]);
+    const allowed = new Set(["B", "STRONG", "I", "EM", "U", "S", "H2", "H3", "P", "DIV", "BR", "BLOCKQUOTE", "UL", "OL", "LI", "A", "IMG"]);
     template.content.querySelectorAll("*").forEach(node => {
       if (!allowed.has(node.tagName)) {
         node.replaceWith(...Array.from(node.childNodes));
         return;
       }
       const href = node.tagName === "A" ? node.getAttribute("href") || "" : "";
+      const src = node.tagName === "IMG" ? node.getAttribute("src") || "" : "";
+      const style = node.getAttribute("style") || "";
       [...node.attributes].forEach(attribute => node.removeAttribute(attribute.name));
       if (node.tagName === "A") {
         if (!/^https?:\/\//i.test(href)) node.replaceWith(...Array.from(node.childNodes));
@@ -296,6 +299,17 @@
           node.setAttribute("target", "_blank");
           node.setAttribute("rel", "noopener noreferrer");
         }
+      }
+      if (node.tagName === "IMG") {
+        if (!/^https?:\/\//i.test(src)) node.replaceWith(...Array.from(node.childNodes));
+        else {
+          node.setAttribute("src", src);
+          node.setAttribute("alt", "Imagem inserida no artigo");
+          node.setAttribute("loading", "lazy");
+        }
+      }
+      if ((node.tagName === "P" || node.tagName === "DIV") && /^text-align\s*:\s*(left|center|right|justify)\s*;?$/i.test(style.trim())) {
+        node.setAttribute("style", `text-align: ${style.split(":")[1].replace(";", "").trim()}`);
       }
     });
     return template.innerHTML.trim();
@@ -320,16 +334,21 @@
     state.blogError = "";
     render();
     const result = await sb.from("blog_posts")
-      .select("id, author_id, title, excerpt, content_html, cover_url, image_2_url, image_3_url, status, is_featured, created_at, updated_at, published_at, author:profiles(id, username, avatar_url, title, title_color)")
+      .select("id, author_id, title, excerpt, content_html, cover_url, image_2_url, image_3_url, status, is_featured, created_at, updated_at, published_at")
       .eq("status", "published")
       .order("is_featured", { ascending: false })
       .order("published_at", { ascending: false });
     state.blogLoading = false;
     if (result.error) {
+      console.error("[BLOGS] Falha ao carregar blog_posts:", result.error);
       state.blogError = "Não foi possível carregar os blogs. Execute a atualização do schema no Supabase.";
       state.blogPosts = [];
     } else {
-      state.blogPosts = result.data || [];
+      const posts = result.data || [];
+      const authorIds = [...new Set(posts.map(post => post.author_id).filter(Boolean))];
+      const authors = authorIds.length ? await sb.from("profiles").select("id, username, avatar_url, title, title_color").in("id", authorIds) : { data: [] };
+      const authorsById = new Map((authors.data || []).map(author => [author.id, author]));
+      state.blogPosts = posts.map(post => ({ ...post, author: authorsById.get(post.author_id) || null }));
       const blogIds = state.blogPosts.map(post => post.id);
       const likes = blogIds.length ? await sb.from("blog_likes").select("blog_id, user_id").in("blog_id", blogIds) : { data: [] };
       const comments = blogIds.length ? await sb.from("blog_comments").select("blog_id").in("blog_id", blogIds) : { data: [] };
@@ -4065,6 +4084,10 @@
     $$('[data-blog-like]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleBlogLike(el.dataset.blogLike); }));
     $$('[data-blog-comments]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); const post = state.blogPosts.find(item => String(item.id) === String(el.dataset.blogComments)); if (post) openBlogComments(post); }));
     $$('[data-blog-share]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); const post = state.blogPosts.find(item => String(item.id) === String(el.dataset.blogShare)); if (post) shareBlog(post.id, post.title); }));
+    if ($("#blog-form") && $(".blog-toolbar") && !$("#blog-inline-image")) {
+      $(".blog-toolbar").insertAdjacentHTML("beforeend", '<button type="button" data-blog-command="strikeThrough">Riscado</button><button type="button" data-blog-command="insertOrderedList">1. Lista</button><button type="button" data-blog-command="justifyLeft">Esquerda</button><button type="button" data-blog-command="justifyCenter">Centro</button><button type="button" data-blog-command="justifyRight">Direita</button><button type="button" data-blog-command="undo">Desfazer</button><button type="button" data-blog-command="redo">Refazer</button><button type="button" data-blog-command="removeFormat">Limpar</button><button type="button" data-blog-image>Imagem no texto</button>');
+      $(".blog-toolbar").insertAdjacentHTML("afterend", '<input id="blog-inline-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>');
+    }
     $$('[data-blog-command]').forEach(el => el.addEventListener("click", () => {
       const command = el.dataset.blogCommand;
       const value = el.dataset.blogValue;
@@ -4074,6 +4097,36 @@
       } else document.execCommand(command, false, value || null);
       $("#blog-editor")?.focus();
     }));
+    $('[data-blog-image]')?.addEventListener("click", () => {
+      const selection = window.getSelection();
+      state.blogEditorRange = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+      $("#blog-inline-image")?.click();
+    });
+    $("#blog-inline-image")?.addEventListener("change", async event => {
+      const file = event.currentTarget.files?.[0];
+      if (!file) return;
+      try {
+        const url = await uploadBlogImage(file, "inline");
+        const editor = $("#blog-editor");
+        if (!editor) return;
+        editor.focus();
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        if (state.blogEditorRange) selection?.addRange(state.blogEditorRange);
+        else {
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          range.collapse(false);
+          selection?.addRange(range);
+        }
+        document.execCommand("insertImage", false, url);
+      } catch (error) {
+        toast(error.message || "Não foi possível inserir a imagem.");
+      } finally {
+        event.currentTarget.value = "";
+        state.blogEditorRange = null;
+      }
+    });
     if ($("#blog-form") && $(".blog-image-fields")) $(".blog-image-fields").insertAdjacentHTML("beforebegin", '<p class="format-hint blog-image-hint">Formato recomendado: capa vertical 720×1440; imagens laterais quadradas 900×900. Elas serão exibidas com a capa maior e as duas laterais empilhadas.</p>');
     $("#blog-form")?.addEventListener("submit", event => { event.preventDefault(); publishBlogPost(event.currentTarget); });
     $$('[data-public-collection]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); loadPublicProfile(el.dataset.publicOwner, el.dataset.publicCollection); }));
