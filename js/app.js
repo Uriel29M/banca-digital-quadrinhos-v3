@@ -196,6 +196,7 @@
   }
 
   function applyRoute() {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     const params = new URLSearchParams(window.location.search);
     const readerId = params.get("ler");
     const page = params.get("pagina") || "";
@@ -292,6 +293,16 @@
     return `<img class="${className} ${planClass}" src="${escapeHTML(profile?.avatar_url || DEFAULT_AVATAR_URL)}" alt="Foto de ${escapeHTML(profile?.username || "usuário")}">`;
   }
 
+  function syncTopAvatar() {
+    const headerAvatar = $(".avatar");
+    if (!headerAvatar) return;
+    headerAvatar.innerHTML = avatarMarkup(state.profile, "top-avatar-img");
+    headerAvatar.title = state.session ? "Abrir minha estante" : "Entrar ou abrir minha estante";
+    headerAvatar.classList.toggle("avatar-admin", state.profile?.plan === "admin");
+    headerAvatar.classList.toggle("avatar-moderator", state.profile?.plan === "moderator");
+    headerAvatar.classList.toggle("avatar-premium", state.profile?.plan === "premium");
+  }
+
   function appAssetUrl(path) {
     return new URL(String(path).replace(/^\/+/, ""), document.baseURI).href;
   }
@@ -372,6 +383,7 @@
     }
     await loadNotifications();
     state.authReady = true;
+    syncTopAvatar();
     render();
   }
 
@@ -902,7 +914,7 @@
     if (!sb || !item?.id) return toast("Os comentários ainda não estão disponíveis.");
     const overlay = document.createElement("div");
     overlay.className = "modal-backdrop comments-modal-backdrop";
-    overlay.innerHTML = `<div class="modal comments-modal"><div class="section-head"><div><h2>Comentários</h2><div class="section-subtitle">${escapeHTML(item.title || "Quadrinho")}</div></div><button class="small-btn" data-close>Fechar</button></div><div class="comments-list"><span class="section-subtitle">Carregando...</span></div>${state.session ? '<form class="comment-form"><textarea name="body" maxlength="1000" required placeholder="Escreva um comentário..."></textarea><button class="small-btn" type="submit">Comentar</button></form>' : '<p class="section-subtitle">Entre para comentar.</p>'}</div>`;
+    overlay.innerHTML = `<div class="modal comments-modal"><div class="section-head"><div><h2>Comentários</h2><div class="section-subtitle">${escapeHTML(itemDisplayTitle(item))}</div></div><button class="small-btn" data-close>Fechar</button></div><div class="comments-list"><span class="section-subtitle">Carregando...</span></div>${state.session ? '<form class="comment-form"><textarea name="body" maxlength="1000" required placeholder="Escreva um comentário..."></textarea><button class="small-btn" type="submit">Comentar</button></form>' : '<p class="section-subtitle">Entre para comentar.</p>'}</div>`;
     $("#modal-root").appendChild(overlay);
     $("[data-close]", overlay).onclick = () => overlay.remove();
     const list = $(".comments-list", overlay);
@@ -2918,7 +2930,19 @@
   }
 
   function itemDisplayTitle(item) {
-    const base = item?.seriesTitle || item?.title || "Quadrinho";
+    const candidates = [item?.seriesTitle, item?.title, item?.name, item?.comicTitle, item?.displayTitle];
+    let base = candidates.find(value => {
+      const text = String(value || "").trim();
+      return text && !/^(quadrinho|hq)$/i.test(text);
+    });
+    if (!base) {
+      const source = item?.fileName || item?.filename || item?.originalName || item?.fileUrl;
+      let filename = String(source || "").split(/[\\/?]/).pop() || "";
+      try { filename = decodeURIComponent(filename); } catch {}
+      filename = filename.replace(/\.[a-z0-9]{2,5}$/i, "").replace(/[+_]+/g, " ").replace(/\s+/g, " ").trim();
+      if (filename && !/^(quadrinho|hq)$/i.test(filename)) base = filename;
+    }
+    base ||= "Quadrinho";
     const issue = String(item?.issue || "").trim();
     if (!issue) return base;
     const number = issue.match(/\d+/)?.[0];
@@ -2955,6 +2979,8 @@
       state.homeHeroId = heroItem?.id || null;
     }
     const mostClicked = uniqueCatalogItems([...lib].sort((a,b) => (b.clicks||0) - (a.clicks||0)).slice(0, 8));
+    const heroTitle = heroItem ? itemDisplayTitle(heroItem) : "Sua banca digital";
+    const heroMeta = heroItem ? [heroItem.issue, heroItem.type ? formatType(heroItem.type) : "", heroItem.year].map(value => String(value || "").trim()).filter(Boolean).join(" · ") : "";
     let randoms = state.homeRandomIds.map(id => lib.find(item => item.id === id)).filter(Boolean);
     if (!randoms.length) {
       randoms = uniqueCatalogItems([...lib].sort(() => Math.random() - .5).slice(0, 8));
@@ -2968,8 +2994,8 @@
         <div class="hero-cover" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-size="hero" data-open="${escapeHTML(heroItem?.id || "")}" data-open-direct="true" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')" aria-label="Abrir quadrinho em destaque"></div>
         <div class="hero-content">
           <div class="eyebrow">Destaque da banca</div>
-          <h1>${escapeHTML(heroItem?.title || "Sua banca digital")}</h1>
-          <div class="hero-meta">${escapeHTML(heroItem?.issue || "")} · ${formatType(heroItem?.type || "comic")} · ${escapeHTML(String(heroItem?.year || ""))}</div>
+          <h1>${escapeHTML(heroTitle)}</h1>
+          ${heroMeta ? `<div class="hero-meta">${escapeHTML(heroMeta)}</div>` : ""}
           <p>${escapeHTML(heroItem?.description || "Publique e descubra quadrinhos sem precisar armazenar os arquivos no servidor.")}</p>
           ${heroItem ? `<button class="btn btn-primary" data-open="${escapeHTML(heroItem.id)}" data-open-direct="true">▶ Ler agora</button>` : ""}
           <button class="btn btn-secondary" data-action="random">🎲 Surpreenda-me</button>
@@ -3143,6 +3169,12 @@
     return room.access === "premium" ? "Premium" : room.access === "staff" ? "Staff" : "Público";
   }
 
+  function chatMessageMarkup(message, profile = {}) {
+    const username = cleanUsername(profile.username || "usuário");
+    const title = String(profile.title || "").trim();
+    return `<div class="chat-message ${message.sender_id === state.session.user.id ? "is-mine" : ""}"><a class="chat-message-author" href="${escapeHTML(publicProfileHref(username))}" target="_blank" rel="noopener">${avatarMarkup({ ...profile, username }, "chat-message-avatar")}<span><b>@${escapeHTML(username)}</b>${title ? `<em style="--title-bg:${safeTitleColor(profile.title_color)}">${escapeHTML(title)}</em>` : ""}</span></a><div>${escapeHTML(message.body)}</div><small>${escapeHTML(formatCommentDate(message.created_at))}</small></div>`;
+  }
+
   async function openChatRoom(room) {
     if (!state.session || !sb || !room || !canOpenChatRoom(room)) return toast("Você não tem acesso a esta sala.");
     $$('.chat-modal').forEach(modal => modal.closest('.modal-backdrop')?.remove());
@@ -3163,9 +3195,9 @@
     $("[data-close]", overlay).onclick = close;
     const messagesRoot = $("[data-chat-messages]", overlay);
     const renderMessages = async () => {
-      const result = await sb.from("chat_messages").select("id, sender_id, body, created_at, profiles(username)").eq("room_id", room.id).gt("expires_at", new Date().toISOString()).order("created_at", { ascending: true }).limit(200);
+      const result = await sb.from("chat_messages").select("id, sender_id, body, created_at, profiles!chat_messages_sender_id_fkey(username, avatar_url, title, title_color, plan)").eq("room_id", room.id).gt("expires_at", new Date().toISOString()).order("created_at", { ascending: true }).limit(200);
       if (result.error) return messagesRoot.innerHTML = '<div class="empty">Não foi possível carregar as mensagens.</div>';
-      messagesRoot.innerHTML = (result.data || []).map(message => `<div class="chat-message ${message.sender_id === state.session.user.id ? "is-mine" : ""}"><strong>@${escapeHTML(message.profiles?.username || "usuário")}</strong><div>${escapeHTML(message.body)}</div><small>${escapeHTML(formatCommentDate(message.created_at))}</small></div>`).join("") || '<div class="empty">Nenhuma mensagem ainda.</div>';
+      messagesRoot.innerHTML = (result.data || []).map(message => chatMessageMarkup(message, message.profiles || {})).join("") || '<div class="empty">Nenhuma mensagem ainda.</div>';
       messagesRoot.scrollTop = messagesRoot.scrollHeight;
     };
     await renderMessages();
@@ -3179,7 +3211,7 @@
       if (!body || button.disabled) return;
       button.disabled = true;
       const result = await sb.from("chat_messages").insert({ sender_id: state.session.user.id, room_id: room.id, recipient_id: null, body, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
-      if (result.error) toast(result.error.message || "Não foi possível enviar a mensagem.");
+      if (result.error) { console.error("[chat room] erro ao enviar mensagem", result.error); toast(result.error.message || "Não foi possível enviar a mensagem."); }
       else { composeForm.reset(); await renderMessages(); }
       button.disabled = false;
     };
@@ -3235,7 +3267,10 @@
       const now = new Date().toISOString();
       const result = await sb.from("chat_messages").select("id, sender_id, body, created_at").or(`and(sender_id.eq.${state.session.user.id},recipient_id.eq.${contact.id}),and(sender_id.eq.${contact.id},recipient_id.eq.${state.session.user.id})`).gt("expires_at", now).order("created_at", { ascending: true }).limit(200);
       if (result.error) return messagesRoot.innerHTML = '<div class="empty">Não foi possível carregar as mensagens.</div>';
-      messagesRoot.innerHTML = (result.data || []).map(message => `<div class="chat-message ${message.sender_id === state.session.user.id ? "is-mine" : ""}"><div>${escapeHTML(message.body)}</div><small>${escapeHTML(formatCommentDate(message.created_at))}</small></div>`).join("") || '<div class="empty">Nenhuma mensagem ainda.</div>';
+      const senderIds = [...new Set((result.data || []).map(message => message.sender_id).filter(Boolean))];
+      const profilesResult = senderIds.length ? await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan").in("id", senderIds) : { data: [] };
+      const profilesById = new Map((profilesResult.data || []).map(profile => [profile.id, profile]));
+      messagesRoot.innerHTML = (result.data || []).map(message => chatMessageMarkup(message, profilesById.get(message.sender_id) || (message.sender_id === state.session.user.id ? state.profile : {}))).join("") || '<div class="empty">Nenhuma mensagem ainda.</div>';
       messagesRoot.scrollTop = messagesRoot.scrollHeight;
     };
     await renderMessages();
@@ -3257,7 +3292,8 @@
       if (result.error) {
         $(`[data-chat-pending="${optimisticId}"]`, messagesRoot)?.remove();
         submitButton.disabled = false;
-        return toast("Não foi possível enviar a mensagem.");
+        console.error("[private chat] erro ao enviar mensagem", result.error);
+        return toast(result.error.message || "Não foi possível enviar a mensagem.");
       }
       await renderMessages();
       submitButton.disabled = false;
@@ -3684,7 +3720,6 @@
     state.section = section;
     syncActiveNav();
     render();
-    window.scrollTo({top:0, behavior:"smooth"});
   }
 
   function openPublisherSettings(name) {
@@ -3721,8 +3756,11 @@
   function bind() {
     syncActiveNav();
     if (state.section === "shelf" && state.session) {
-      const eyebrow = $(".profile-header .eyebrow");
-      if (eyebrow && !$(".profile-follow-summary", eyebrow.parentElement)) eyebrow.insertAdjacentHTML("afterend", followSummary(state.session.user.id, state.followerCount, state.followingCount));
+      const shelfHeading = $(".content > .section-head .section-title");
+      if (shelfHeading) {
+        shelfHeading.textContent = `Estante de @${state.profile?.username || state.session.user.user_metadata?.username || "usuário"}`;
+        if (!$(".profile-follow-summary", shelfHeading.parentElement)) shelfHeading.insertAdjacentHTML("afterend", followSummary(state.session.user.id, state.followerCount, state.followingCount));
+      }
     }
     if (state.section === "public-profile" && state.publicProfile?.profile && !state.publicProfile.collectionId) {
       const publicSummary = $(".public-profile-page > .section-head .section-subtitle");
@@ -3739,14 +3777,7 @@
     }
     const canManage = state.profile?.plan === "admin";
     const isAdmin = state.profile?.plan === "admin";
-    const headerAvatar = $(".avatar");
-    if (headerAvatar) {
-      headerAvatar.innerHTML = avatarMarkup(state.profile, "top-avatar-img");
-      headerAvatar.title = state.session ? "Abrir minha estante" : "Entrar ou abrir minha estante";
-      headerAvatar.classList.toggle("avatar-admin", state.profile?.plan === "admin");
-      headerAvatar.classList.toggle("avatar-moderator", state.profile?.plan === "moderator");
-      headerAvatar.classList.toggle("avatar-premium", state.profile?.plan === "premium");
-    }
+    syncTopAvatar();
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
     $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
     $$('.messages-nav').forEach(button => { button.style.display = state.session ? "" : "none"; });
@@ -4369,6 +4400,7 @@
   }
   if (initialPublicUsername) render();
   else applyRoute();
+  syncTopAvatar();
   const warmLibarchive = () => loadLibarchiveModule().catch(error => console.warn("Biblioteca CBR indisponível:", error));
   if ("requestIdleCallback" in window) window.requestIdleCallback(warmLibarchive, { timeout: 4000 });
   else window.setTimeout(warmLibarchive, 2500);

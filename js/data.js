@@ -285,7 +285,106 @@ window.DEFAULT_SERIES.push({
   tags: ["Nuclear", "Firestorm", "Ronnie Raymond", "Bedford", "super-herói"]
 });
 
+window.DEFAULT_SERIES.push({
+  id: "series-new-champion-of-shazam",
+  name: "A Nova Campeã do Shazam",
+  seriesTitle: "A Nova Campeã do Shazam",
+  originalTitle: "The New Champion of Shazam!",
+  type: "comic",
+  publisher: "DC Comics",
+  imprint: "DC Comics",
+  publication: "Minissérie",
+  status: "Encerrada",
+  editions: "04",
+  year: 2022,
+  description: "Mary Bromfield sempre lutou para determinar quem ela é fora de sua família… meio difícil de fazer quando todos vocês são super-heróis! Agora, após o sacrifício heroico de Billy Batson, o poder de Shazam desapareceu e ela ficou impotente. A maioria dos heróis ficaria perturbada, mas não Mary. Finalmente chegou a hora de uma viagem de autodescoberta enquanto ela se prepara para seu primeiro ano de faculdade e uma vida civil. Mas nada é realmente normal para esta jovem heroína, porque ela acaba de ser escolhida como a nova campeã do Shazam! (Pelo menos de acordo com um coelho falante enviado por seu irmão Billy.) Ela vai abraçar o poder? Ou morrerá junto com a esperança de sobrevivência deste mundo contra as misteriosas forças mágicas que esperam para assumir o controle?",
+  coverUrl: "",
+  telegramUrl: "",
+  author: "",
+  character: "Mary Bromfield / Shazam",
+  tags: ["Shazam", "Mary Marvel", "DC Comics", "super-herói"]
+});
+
+window.DEFAULT_SERIES.push({
+  id: "series-new-golden-age",
+  name: "A Nova Era de Ouro",
+  seriesTitle: "A Nova Era de Ouro",
+  originalTitle: "The New Golden Age",
+  type: "comic",
+  publisher: "DC Comics",
+  imprint: "DC Comics",
+  publication: "Edição Especial",
+  status: "Encerrada",
+  editions: "01",
+  year: 2022,
+  description: "Da Sociedade da Justiça da América para a Legião dos Super-Heróis, A Nova Era de Ouro irá desbloquear uma épica e secreta história de heroísmo da DC, lançando um novo grupo de títulos no Universo DC. De 1940 a 3040, heróis combatem o grande mal de seus tempos. Mas nas consequências de Além de Flashpoint estes heróis e vilões irão ter suas vidas viradas de cabeça para baixo. O futuro da DC… e seu passado… nunca mais serão os mesmos. Mas como o Mímico e a Marionete estão envolvidos nisto? Por que Rip Hunter e os Mestres do Tempo são os heróis mais improváveis do Universo DC? E quem ou o que é… Nostalgia? Não perca o mais estranho mistério que já aconteceu no Universo DC.",
+  coverUrl: "",
+  telegramUrl: "",
+  author: "",
+  character: "Sociedade da Justiça da América / Legião dos Super-Heróis",
+  tags: ["DC Comics", "Sociedade da Justiça", "Legião dos Super-Heróis", "viagem no tempo"]
+});
+
+window.DEFAULT_SERIES.push({
+  id: "series-death-of-superman-30th-anniversary",
+  name: "A Morte do Superman Especial de 30º Aniversário",
+  seriesTitle: "A Morte do Superman Especial de 30º Aniversário",
+  originalTitle: "The Death of Superman 30th Anniversary Special",
+  type: "comic",
+  publisher: "DC Comics",
+  imprint: "DC Comics",
+  publication: "Edição Especial",
+  status: "Finalizada",
+  editions: "01",
+  year: 2022,
+  description: "Jon fica chateado quando descobre a “morte” de seu pai anos antes, durante seu encontro com Apocalypse. Enquanto Lois e Clark explicam a história para Jon, eles são interrompidos quando um novo monstro ataca Metrópolis que tem todos os poderes do Apocalypse mais algumas habilidades adicionais próprias.",
+  coverUrl: "",
+  telegramUrl: "",
+  author: "",
+  character: "Superman / Jon Kent",
+  tags: ["Superman", "Jon Kent", "Apocalypse", "DC Comics"]
+});
+
 window.DEFAULT_LIBRARY = [
+  {
+    id: "new-champion-of-shazam-001",
+    seriesId: "series-new-champion-of-shazam",
+    title: "A Nova Campeã do Shazam",
+    issue: "1",
+    format: "cbr",
+    fileUrl: "https://www.mediafire.com/file/avlv11y6ye4v869/ThNwChmpnfShzm%2521_01_%2528of_04%2529_%25282022%2529_%2528Zona-SQ%2529.cbr/file",
+    telegramUrl: "",
+    clicks: 0,
+    featured: true,
+    randomWeight: 5,
+    collectionIds: []
+  },
+  {
+    id: "new-golden-age-001",
+    seriesId: "series-new-golden-age",
+    title: "A Nova Era de Ouro",
+    issue: "1",
+    format: "cbr",
+    fileUrl: "https://www.mediafire.com/file/838xweqqxw8ua95/NVERdOUR.cbr/file",
+    telegramUrl: "",
+    clicks: 0,
+    featured: true,
+    randomWeight: 5,
+    collectionIds: []
+  },
+  {
+    id: "death-of-superman-30th-anniversary-001",
+    seriesId: "series-death-of-superman-30th-anniversary",
+    title: "A Morte do Superman Especial de 30º Aniversário",
+    issue: "1",
+    format: "cbr",
+    fileUrl: "https://www.mediafire.com/file/sl0hi9zzv3yyo1u/MrtSprMn30anvrs_%25282022%2529.%2528ZF-SQ%2529.cbr/file",
+    telegramUrl: "",
+    clicks: 0,
+    featured: true,
+    randomWeight: 5,
+    collectionIds: []
+  },
   {
     id: "hq-001",
     title: "Casulo: Metamorfose",
