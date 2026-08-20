@@ -137,6 +137,12 @@
     shelfSnapshot: null,
     shelfExpanded: { saved: false, read: false },
     shelfCategories: [],
+    blogShelfCategories: [],
+    shelfTab: "comics",
+    publicShelfTab: "comics",
+    blogSaveIds: new Set(),
+    authoredBlogPosts: [],
+    savedBlogPosts: [],
     collectionFilter: { field: "all", query: "" },
     comicLikeIds: new Set(),
     comicLikeCounts: new Map(),
@@ -315,6 +321,33 @@
     return template.innerHTML.trim();
   }
 
+  function openBlogLinkDialog() {
+    const editor = $("#blog-editor");
+    if (!editor) return;
+    const selection = window.getSelection();
+    const savedRange = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = '<div class="modal blog-link-modal"><div class="section-head"><div><h2>Adicionar link</h2><div class="section-subtitle">Cole o endereço do link:</div></div><button type="button" class="small-btn" data-close>Fechar</button></div><form id="blog-link-form"><div class="field"><label>Endereço</label><input name="url" type="url" required placeholder="https://exemplo.com"></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button type="submit" class="btn btn-danger">Adicionar link</button></div></form></div>';
+    $("#modal-root").appendChild(overlay);
+    const close = () => overlay.remove();
+    $$('[data-close]', overlay).forEach(button => button.addEventListener("click", close));
+    overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
+    $("#blog-link-form", overlay)?.addEventListener("submit", event => {
+      event.preventDefault();
+      const url = String(new FormData(event.currentTarget).get("url") || "").trim();
+      if (!/^https?:\/\//i.test(url)) return toast("Use um endereço começando com http:// ou https://.");
+      editor.focus();
+      const currentSelection = window.getSelection();
+      currentSelection?.removeAllRanges();
+      if (savedRange) currentSelection?.addRange(savedRange);
+      if (currentSelection?.toString().trim()) document.execCommand("createLink", false, url);
+      else document.execCommand("insertHTML", false, `<a href="${escapeHTML(url)}">${escapeHTML(url)}</a>`);
+      close();
+    });
+    $("input[name=url]", overlay)?.focus();
+  }
+
   function blogDate(value) {
     if (!value) return "";
     return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
@@ -352,6 +385,8 @@
       const blogIds = state.blogPosts.map(post => post.id);
       const likes = blogIds.length ? await sb.from("blog_likes").select("blog_id, user_id").in("blog_id", blogIds) : { data: [] };
       const comments = blogIds.length ? await sb.from("blog_comments").select("blog_id").in("blog_id", blogIds) : { data: [] };
+      const saves = blogIds.length && state.session?.user?.id ? await sb.from("blog_saves").select("blog_id").eq("user_id", state.session.user.id).in("blog_id", blogIds) : { data: [] };
+      state.blogSaveIds = new Set((saves.data || []).map(row => String(row.blog_id)));
       state.blogLikeIds = new Set((likes.data || []).filter(row => row.user_id === state.session?.user?.id).map(row => String(row.blog_id)));
       state.blogLikeCounts = (likes.data || []).reduce((counts, row) => counts.set(String(row.blog_id), (counts.get(String(row.blog_id)) || 0) + 1), new Map());
       state.blogCommentCounts = (comments.data || []).reduce((counts, row) => counts.set(String(row.blog_id), (counts.get(String(row.blog_id)) || 0) + 1), new Map());
@@ -376,22 +411,25 @@
     const title = String(data.get("title") || "").trim();
     const excerpt = String(data.get("excerpt") || "").trim();
     const content = safeBlogHtml($("#blog-editor")?.innerHTML || "");
+    const coverFile = data.get("cover");
     if (title.length < 3) return toast("Informe um título para o blog.");
+    if (!coverFile?.size) return toast("Adicione uma capa para publicar o blog.");
     if (!content) return toast("Escreva o conteúdo do blog antes de publicar.");
     const button = $("button[type=submit]", form);
     if (button) button.disabled = true;
     try {
-      const imageUrls = [];
-      for (const [index, name] of ["cover", "image2", "image3"].entries()) imageUrls.push(await uploadBlogImage(data.get(name), index + 1));
+      const coverUrl = await uploadBlogImage(coverFile, 1);
+      const image2Url = data.get("image2")?.size ? await uploadBlogImage(data.get("image2"), 2) : null;
+      const image3Url = data.get("image3")?.size ? await uploadBlogImage(data.get("image3"), 3) : image2Url;
       const staff = ["moderator", "admin"].includes(state.profile?.plan);
       const result = await sb.from("blog_posts").insert({
         author_id: state.session.user.id,
         title,
         excerpt: excerpt.slice(0, 500),
         content_html: content,
-        cover_url: imageUrls[0],
-        image_2_url: imageUrls[1],
-        image_3_url: imageUrls[2],
+        cover_url: coverUrl,
+        image_2_url: image2Url,
+        image_3_url: image3Url,
         status: "published",
         is_featured: staff && data.get("isFeatured") === "on",
         published_at: new Date().toISOString()
@@ -416,6 +454,25 @@
     toast(featured ? "Blog removido dos destaques." : "Blog destacado.");
   }
 
+  function findBlogPost(id) {
+    return [...state.blogPosts, ...state.authoredBlogPosts, ...state.savedBlogPosts].find(item => String(item.id) === String(id));
+  }
+
+  async function deleteBlogPost(id) {
+    if (!state.session) return openAuthPage();
+    const post = findBlogPost(id);
+    if (!post) return;
+    const staff = ["moderator", "admin"].includes(state.profile?.plan);
+    const isAuthor = post.author_id === state.session.user.id;
+    if (!staff && !isAuthor) return toast("Você não pode apagar este blog.");
+    if (!window.confirm(`Apagar o blog "${post.title}"? Esta ação não pode ser desfeita.`)) return;
+    const result = await sb.from("blog_posts").delete().eq("id", id);
+    if (result.error) return toast(result.error.message || "Não foi possível apagar o blog.");
+    state.blogOpenId = null;
+    await loadBlogPosts();
+    toast("Blog apagado.");
+  }
+
   async function toggleBlogLike(id) {
     if (!state.session) return openAuthPage();
     const key = String(id);
@@ -432,6 +489,18 @@
       state.blogLikeIds.add(key);
       state.blogLikeCounts.set(key, (state.blogLikeCounts.get(key) || 0) + 1);
     }
+    render();
+  }
+
+  async function toggleBlogSave(id) {
+    if (!state.session) return openAuthPage();
+    const key = String(id);
+    const saved = state.blogSaveIds.has(key);
+    const result = saved
+      ? await sb.from("blog_saves").delete().eq("blog_id", id).eq("user_id", state.session.user.id)
+      : await sb.from("blog_saves").insert({ blog_id: id, user_id: state.session.user.id });
+    if (result.error) return toast("Não foi possível atualizar os blogs salvos. Execute a atualização do schema no Supabase.");
+    saved ? state.blogSaveIds.delete(key) : state.blogSaveIds.add(key);
     render();
   }
 
@@ -476,13 +545,51 @@
     const liked = state.blogLikeIds.has(id);
     const likes = state.blogLikeCounts.get(id) || 0;
     const comments = state.blogCommentCounts.get(id) || 0;
-    return `<div class="blog-engagement"><button class="small-btn ${liked ? "is-liked" : ""}" data-blog-like="${escapeHTML(id)}">${liked ? "♥" : "♡"} ${likes}</button><button class="small-btn" data-blog-comments="${escapeHTML(id)}">Comentários · ${comments}</button><button class="small-btn" data-blog-share="${escapeHTML(id)}">Compartilhar</button></div>`;
+    const saved = state.blogSaveIds.has(id);
+    return `<div class="blog-engagement"><button class="small-btn ${liked ? "is-liked" : ""}" data-blog-like="${escapeHTML(id)}">${liked ? "♥" : "♡"} ${likes}</button><button class="small-btn ${saved ? "is-liked" : ""}" data-blog-save="${escapeHTML(id)}">${saved ? "★ Salvo" : "☆ Salvar"}</button><button class="small-btn" data-blog-comments="${escapeHTML(id)}">Comentários · ${comments}</button><button class="small-btn" data-blog-share="${escapeHTML(id)}">Compartilhar</button></div>`;
   }
 
   function blogCard(post, featured = false) {
     const author = post.author || {};
     const staff = ["moderator", "admin"].includes(state.profile?.plan);
-    return `<article class="blog-card ${featured ? "is-featured" : ""}" data-blog-open="${escapeHTML(post.id)}"><div class="blog-card-images"><div class="blog-card-cover ${post.cover_url ? "has-image" : ""}" ${blogImageStyle(post.cover_url)}></div><div class="blog-card-side"><div class="blog-card-side-image ${post.image_2_url ? "has-image" : ""}" ${blogImageStyle(post.image_2_url)}></div><div class="blog-card-side-image ${post.image_3_url ? "has-image" : ""}" ${blogImageStyle(post.image_3_url)}></div></div></div><div class="blog-card-body"><div class="eyebrow">${post.is_featured ? "Destaque" : "Blog"}</div><h3>${escapeHTML(post.title)}</h3><p>${escapeHTML(post.excerpt || "Confira esta publicação na Banca Digital.")}</p><div class="blog-card-meta">@${escapeHTML(author.username || "usuário")} · ${escapeHTML(blogDate(post.published_at || post.created_at))}</div><div class="blog-card-actions"><button class="small-btn" data-blog-read="${escapeHTML(post.id)}">Ler artigo</button>${staff ? `<button class="small-btn" data-blog-feature="${escapeHTML(post.id)}" data-blog-featured="${post.is_featured ? "true" : "false"}">${post.is_featured ? "Remover destaque" : "Destacar"}</button>` : ""}</div>${blogEngagementMarkup(post)}</div></article>`;
+    const canDelete = staff || state.session?.user?.id === post.author_id;
+    const coverOnly = (!post.image_2_url && !post.image_3_url) || (post.cover_url && post.image_2_url === post.cover_url && post.image_3_url === post.cover_url);
+    return `<article class="blog-card ${featured ? "is-featured" : ""}" data-blog-open="${escapeHTML(post.id)}"><div class="blog-card-images ${coverOnly ? "is-cover-only" : ""}"><div class="blog-card-cover ${post.cover_url ? "has-image" : ""}" ${blogImageStyle(post.cover_url)}></div><div class="blog-card-side"><div class="blog-card-side-image ${post.image_2_url ? "has-image" : ""}" ${blogImageStyle(post.image_2_url)}></div><div class="blog-card-side-image ${post.image_3_url ? "has-image" : ""}" ${blogImageStyle(post.image_3_url)}></div></div></div><div class="blog-card-body"><div class="eyebrow">${post.is_featured ? "Destaque" : "Blog"}</div><h3>${escapeHTML(post.title)}</h3><p>${escapeHTML(post.excerpt || "Confira esta publicação na Banca Digital.")}</p><div class="blog-card-meta">@${escapeHTML(author.username || "usuário")} · ${escapeHTML(blogDate(post.published_at || post.created_at))}</div><div class="blog-card-actions"><button class="small-btn" data-blog-read="${escapeHTML(post.id)}">Ler artigo</button>${staff ? `<button class="small-btn" data-blog-feature="${escapeHTML(post.id)}" data-blog-featured="${post.is_featured ? "true" : "false"}">${post.is_featured ? "Remover destaque" : "Destacar"}</button>` : ""}${canDelete ? `<button class="small-btn danger" data-blog-delete="${escapeHTML(post.id)}">Apagar</button>` : ""}</div>${blogEngagementMarkup(post)}</div></article>`;
+  }
+
+  function blogHighlightsSidebar() {
+    const highlights = state.blogPosts.filter(post => post.is_featured).slice(0, 3);
+    const recent = state.blogPosts.filter(post => !post.is_featured).slice(0, 3);
+    if (!highlights.length && !recent.length) return "";
+    const cards = posts => posts.map(post => `<article class="blog-highlight-item" data-blog-open="${escapeHTML(post.id)}"><div class="blog-highlight-cover ${post.cover_url ? "has-image" : ""}" ${blogImageStyle(post.cover_url)}></div><div class="blog-highlight-body"><h3>${escapeHTML(post.title)}</h3><p>${escapeHTML(post.excerpt || "Confira esta publicação.")}</p></div></article>`).join("");
+    return `<aside class="blog-highlights-sidebar">${highlights.length ? `<div class="eyebrow">Em destaque</div><h2>Blogs em destaque</h2><div class="blog-highlights-list">${cards(highlights)}</div>` : ""}${recent.length ? `<div class="blog-sidebar-recent"><div class="eyebrow">Atualizações</div><h2>Recentes</h2><div class="blog-highlights-list">${cards(recent)}</div></div>` : ""}</aside>`;
+  }
+
+  function blogAuthorMarkup(post) {
+    const author = post.author || {};
+    const username = author.username || "usuário";
+    const avatar = author.avatar_url || "https://i.pinimg.com/736x/be/17/10/be1710edaace144c17bdaf6deb2d2cc8.jpg";
+    return `<a href="${escapeHTML(publicProfileHref(username))}" class="blog-author-card"><img src="${escapeHTML(avatar)}" alt="Foto de @${escapeHTML(username)}"><span><span class="eyebrow">Publicado por</span><span class="blog-author-name">@${escapeHTML(username)}</span>${author.title ? `<span class="blog-author-title" style="color:${escapeHTML(safeTitleColor(author.title_color))}">${escapeHTML(author.title)}</span>` : ""}</span></a>`;
+  }
+
+  function blogCommentsSection(post) {
+    return `<section class="blog-inline-comments" data-blog-inline-comments="${escapeHTML(post.id)}"><div class="section-head"><div><h2>Comentários</h2><div class="section-subtitle">Converse sobre esta publicação.</div></div></div><div class="blog-inline-comments-list"><span class="section-subtitle">Carregando comentários...</span></div>${state.session ? '<form class="comment-form blog-inline-comment-form"><textarea name="body" maxlength="1000" required placeholder="Escreva um comentário..."></textarea><button class="small-btn" type="submit">Comentar</button></form>' : '<p class="section-subtitle">Entre para comentar.</p>'}</section>`;
+  }
+
+  async function loadBlogCommentsSection(post, section) {
+    const list = $(".blog-inline-comments-list", section);
+    if (!list) return;
+    const result = await sb.from("blog_comments").select("id, user_id, body, created_at").eq("blog_id", post.id).order("created_at", { ascending: true });
+    if (result.error) return list.innerHTML = '<span class="section-subtitle">Não foi possível carregar os comentários.</span>';
+    const rows = result.data || [];
+    const ids = [...new Set(rows.map(comment => comment.user_id).filter(Boolean))];
+    const profiles = ids.length ? await sb.from("profiles").select("id, username, avatar_url").in("id", ids) : { data: [] };
+    const profilesById = new Map((profiles.data || []).map(profile => [profile.id, profile]));
+    list.innerHTML = rows.map(comment => {
+      const author = profilesById.get(comment.user_id) || {};
+      return `<article class="blog-comment"><div class="blog-comment-head"><b>@${escapeHTML(author.username || "usuário")}</b><time>${escapeHTML(blogDate(comment.created_at))}</time></div><p>${escapeHTML(comment.body)}</p></article>`;
+    }).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
+    state.blogCommentCounts.set(String(post.id), rows.length);
   }
 
   function renderBlogEditor() {
@@ -494,7 +601,8 @@
   function renderBlogPostPage(post) {
     const author = post.author || {};
     const staff = ["moderator", "admin"].includes(state.profile?.plan);
-    return `<div class="content blog-post-page"><div class="section-head"><div><div class="eyebrow">${post.is_featured ? "Blog em destaque" : "Blog"}</div><h1 class="section-title">${escapeHTML(post.title)}</h1><div class="section-subtitle">@${escapeHTML(author.username || "usuário")} · ${escapeHTML(blogDate(post.published_at || post.created_at))}</div></div><button class="small-btn" data-blog-back>Voltar aos blogs</button></div><div class="blog-post-gallery"><div class="blog-post-cover ${post.cover_url ? "has-image" : ""}" ${blogImageStyle(post.cover_url)}></div><div class="blog-post-side"><div class="blog-post-side-image ${post.image_2_url ? "has-image" : ""}" ${blogImageStyle(post.image_2_url)}></div><div class="blog-post-side-image ${post.image_3_url ? "has-image" : ""}" ${blogImageStyle(post.image_3_url)}></div></div></div>${post.excerpt ? `<p class="blog-post-excerpt">${escapeHTML(post.excerpt)}</p>` : ""}<article class="blog-post-content">${safeBlogHtml(post.content_html)}</article>${blogEngagementMarkup(post)}${staff ? `<button class="small-btn" data-blog-feature="${escapeHTML(post.id)}" data-blog-featured="${post.is_featured ? "true" : "false"}">${post.is_featured ? "Remover destaque" : "Destacar blog"}</button>` : ""}</div>`;
+    const canDelete = staff || state.session?.user?.id === post.author_id;
+    return `<div class="content blog-post-page"><div class="section-head"><div><div class="eyebrow">${post.is_featured ? "Blog em destaque" : "Blog"}</div><h1 class="section-title">${escapeHTML(post.title)}</h1><div class="section-subtitle">@${escapeHTML(author.username || "usuário")} · ${escapeHTML(blogDate(post.published_at || post.created_at))}</div></div><button class="small-btn" data-blog-back>Voltar aos blogs</button></div><div class="blog-post-gallery"><div class="blog-post-cover ${post.cover_url ? "has-image" : ""}" ${blogImageStyle(post.cover_url)}></div><div class="blog-post-side"><div class="blog-post-side-image ${post.image_2_url ? "has-image" : ""}" ${blogImageStyle(post.image_2_url)}></div><div class="blog-post-side-image ${post.image_3_url ? "has-image" : ""}" ${blogImageStyle(post.image_3_url)}></div></div></div>${post.excerpt ? `<p class="blog-post-excerpt">${escapeHTML(post.excerpt)}</p>` : ""}<article class="blog-post-content">${safeBlogHtml(post.content_html)}</article>${blogEngagementMarkup(post)}${staff ? `<button class="small-btn" data-blog-feature="${escapeHTML(post.id)}" data-blog-featured="${post.is_featured ? "true" : "false"}">${post.is_featured ? "Remover destaque" : "Destacar blog"}</button>` : ""}${canDelete ? `<button class="small-btn danger blog-delete-button" data-blog-delete="${escapeHTML(post.id)}">Apagar blog</button>` : ""}${blogAuthorMarkup(post)}</div>`;
   }
 
   function renderBlogsPage() {
@@ -609,8 +717,16 @@
         render();
         return toast("Sua conta está banida.");
       }
-      const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids").eq("owner_id", session.user.id).order("created_at", { ascending: true });
-      state.shelfCategories = (collections.data || []).map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, itemIds: Array.isArray(collection.item_ids) ? collection.item_ids : [] }));
+      const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids, collection_type, blog_ids").eq("owner_id", session.user.id).order("created_at", { ascending: true });
+      state.shelfCategories = (collections.data || []).filter(collection => collection.collection_type !== "blog").map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, itemIds: Array.isArray(collection.item_ids) ? collection.item_ids : [] }));
+      state.blogShelfCategories = (collections.data || []).filter(collection => collection.collection_type === "blog").map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, blogIds: Array.isArray(collection.blog_ids) ? collection.blog_ids : [] }));
+      const authoredBlogs = await sb.from("blog_posts").select("id, author_id, title, excerpt, cover_url, image_2_url, image_3_url, status, is_featured, created_at, published_at").eq("author_id", session.user.id).eq("status", "published").order("published_at", { ascending: false });
+      state.authoredBlogPosts = authoredBlogs.data || [];
+      const blogSaves = await sb.from("blog_saves").select("blog_id").eq("user_id", session.user.id);
+      state.blogSaveIds = new Set((blogSaves.data || []).map(row => String(row.blog_id)));
+      const savedBlogIds = [...state.blogSaveIds];
+      const savedBlogs = savedBlogIds.length ? await sb.from("blog_posts").select("id, author_id, title, excerpt, cover_url, image_2_url, image_3_url, status, is_featured, created_at, published_at").in("id", savedBlogIds).eq("status", "published") : { data: [] };
+      state.savedBlogPosts = savedBlogs.data || [];
       const favorites = await sb.from("favorites").select("item_id").eq("user_id", session.user.id);
       state.favoriteIds = new Set((favorites.data || []).map(row => row.item_id));
       const progress = await sb.from("reading_progress").select("item_id, page, total_pages, completed, updated_at").eq("user_id", session.user.id);
@@ -681,6 +797,7 @@
 
   async function loadPublicProfile(username, collectionId = null) {
     state.publicProfile = { loading: true, username, collectionId };
+    state.publicShelfTab = "comics";
     state.collectionFilter = { field: "all", query: "" };
     state.section = "public-profile";
     render();
@@ -689,7 +806,7 @@
       render();
       return;
     }
-    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_read_public, shelf_liked_public, profile_hidden, is_banned, silenced_until").ilike("username", username).maybeSingle();
+    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_read_public, shelf_liked_public, shelf_blogs_public, profile_hidden, is_banned, silenced_until").ilike("username", username).maybeSingle();
     if (profile.error) {
       profile = await sb.from("profiles").select("id, username, avatar_url, title, plan").ilike("username", username).maybeSingle();
     }
@@ -701,7 +818,11 @@
     const favorites = await sb.from("favorites").select("item_id").eq("user_id", profile.data.id);
     const progress = await sb.from("reading_progress").select("item_id, page, total_pages, completed, updated_at").eq("user_id", profile.data.id);
     const comicLikes = await sb.from("comic_likes").select("item_id").eq("user_id", profile.data.id);
-    const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids").eq("owner_id", profile.data.id).order("created_at", { ascending: true });
+    const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids, collection_type, blog_ids").eq("owner_id", profile.data.id).order("created_at", { ascending: true });
+    const authoredBlogs = await sb.from("blog_posts").select("id, author_id, title, excerpt, cover_url, image_2_url, image_3_url, status, is_featured, created_at, published_at").eq("author_id", profile.data.id).eq("status", "published").order("published_at", { ascending: false });
+    const publicBlogSaves = profile.data.shelf_blogs_public !== false ? await sb.from("blog_saves").select("blog_id").eq("user_id", profile.data.id) : { data: [] };
+    const publicSavedBlogIds = (publicBlogSaves.data || []).map(row => row.blog_id);
+    const savedBlogs = publicSavedBlogIds.length ? await sb.from("blog_posts").select("id, author_id, title, excerpt, cover_url, image_2_url, image_3_url, status, is_featured, created_at, published_at").in("id", publicSavedBlogIds).eq("status", "published") : { data: [] };
     const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", profile.data.id);
     const likes = await sb.from("shelf_collection_likes").select("collection_id, user_id").eq("owner_id", profile.data.id);
     const followers = await sb.from("profile_follows").select("follower_id").eq("following_id", profile.data.id);
@@ -718,7 +839,10 @@
     state.publicProfile = {
       profile: profile.data,
       collectionId,
-      collections: (collections.data || []).map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, itemIds: Array.isArray(collection.item_ids) ? collection.item_ids : [] })),
+      collections: (collections.data || []).filter(collection => collection.collection_type !== "blog").map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, itemIds: Array.isArray(collection.item_ids) ? collection.item_ids : [] })),
+      blogCollections: (collections.data || []).filter(collection => collection.collection_type === "blog").map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, blogIds: Array.isArray(collection.blog_ids) ? collection.blog_ids : [] })),
+      authoredBlogPosts: authoredBlogs.data || [],
+      savedBlogPosts: savedBlogs.data || [],
       favoriteIds: new Set((favorites.data || []).map(row => row.item_id)),
       comicLikeIds: new Set((comicLikes.data || []).map(row => row.item_id)),
       readingProgress: new Map((progress.data || []).map(row => [row.item_id, row])),
@@ -1408,7 +1532,7 @@
     const profileForm = $("#profile-form", overlay);
     const shelfVisibilityField = $$(".field.full", overlay).find(field => field.textContent.includes("Visibilidade"));
     if (["admin", "moderator", "premium"].includes(state.profile?.plan) && shelfVisibilityField) {
-      shelfVisibilityField.insertAdjacentHTML("beforeend", `<label class="checkbox-inline"><input name="shelfLikedPublic" type="checkbox" ${state.profile?.shelf_liked_public !== false ? "checked" : ""}> Mostrar coleção Curtidos</label>`);
+      shelfVisibilityField.insertAdjacentHTML("beforeend", `<label class="checkbox-inline"><input name="shelfLikedPublic" type="checkbox" ${state.profile?.shelf_liked_public !== false ? "checked" : ""}> Mostrar coleção Curtidos</label><label class="checkbox-inline"><input name="shelfBlogsPublic" type="checkbox" ${state.profile?.shelf_blogs_public !== false ? "checked" : ""}> Mostrar coleção Blogs</label>`);
     }
     profileForm.addEventListener("submit", async event => {
       if (!["admin", "moderator", "premium"].includes(state.profile?.plan)) return;
@@ -1439,7 +1563,7 @@
       state.profile = { ...state.profile, ...privacy };
       await originalProfileSubmit(event);
     };
-    $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const preferences = ["admin", "moderator", "premium"].includes(state.profile?.plan) ? { shelf_saved_public: fd.get("shelfSavedPublic") === "on", shelf_read_public: fd.get("shelfReadPublic") === "on" } : {}; const update = await sb.from("profiles").update({ username, avatar_url, ...preferences }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url, ...preferences }; overlay.remove(); render(); toast("Perfil atualizado."); };
+    $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const preferences = ["admin", "moderator", "premium"].includes(state.profile?.plan) ? { shelf_saved_public: fd.get("shelfSavedPublic") === "on", shelf_read_public: fd.get("shelfReadPublic") === "on", shelf_blogs_public: fd.get("shelfBlogsPublic") === "on" } : {}; const update = await sb.from("profiles").update({ username, avatar_url, ...preferences }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url, ...preferences }; overlay.remove(); render(); toast("Perfil atualizado."); };
     $("#profile-form", overlay).addEventListener("submit", async event => {
       const email = String(new FormData(event.currentTarget).get("email") || "").trim().toLowerCase();
       if (!email) return;
@@ -3570,11 +3694,11 @@
 
   async function saveShelfCategories(categories) {
     if (sb && state.session) {
-      const rows = categories.map(category => ({ id: category.id, owner_id: state.session.user.id, name: category.name, cover_url: category.coverUrl || null, is_public: category.isPublic !== false, item_ids: category.itemIds || [] }));
+      const rows = categories.map(category => ({ id: category.id, owner_id: state.session.user.id, name: category.name, cover_url: category.coverUrl || null, is_public: category.isPublic !== false, item_ids: category.itemIds || [], collection_type: "comic", blog_ids: [] }));
       const result = rows.length ? await sb.from("shelf_collections").upsert(rows, { onConflict: "id" }) : { error: null };
       if (result.error) return toast("Não foi possível salvar a organização da estante.");
       const ids = rows.map(row => row.id);
-      const existing = await sb.from("shelf_collections").select("id").eq("owner_id", state.session.user.id);
+      const existing = await sb.from("shelf_collections").select("id").eq("owner_id", state.session.user.id).eq("collection_type", "comic");
       const removedIds = (existing.data || []).map(row => row.id).filter(id => !ids.includes(id));
       if (removedIds.length) await sb.from("shelf_collections").delete().eq("owner_id", state.session.user.id).in("id", removedIds);
     }
@@ -3616,6 +3740,46 @@
   function deleteShelfCategory(categoryId) {
     state.shelfCategories = state.shelfCategories.filter(category => category.id !== categoryId);
     saveShelfCategories(state.shelfCategories);
+  }
+
+  function blogShelfCollectionMarkup(collection, posts, editable = false) {
+    const items = (collection.blogIds || []).map(id => posts.find(post => String(post.id) === String(id))).filter(Boolean);
+    return `<section class="section shelf-collection blog-shelf-collection"><div class="section-head"><div><h2 class="section-title">${escapeHTML(collection.name)}</h2><div class="section-subtitle">${items.length} blog(s)</div></div><div class="shelf-section-actions">${editable ? `<button class="small-btn danger" data-blog-shelf-delete="${escapeHTML(collection.id)}">Excluir</button>` : ""}</div></div><div class="blog-shelf-grid">${items.map(post => blogCard(post)).join("") || '<div class="empty">Nenhum blog nesta coleção.</div>'}</div></section>`;
+  }
+
+  function blogShelfPanelMarkup(publicState = null) {
+    const authored = publicState ? publicState.authoredBlogPosts || [] : state.authoredBlogPosts;
+    const saved = publicState ? publicState.savedBlogPosts || [] : state.savedBlogPosts;
+    const collections = publicState ? publicState.blogCollections || [] : state.blogShelfCategories;
+    const posts = [...new Map([...authored, ...saved].map(post => [String(post.id), post])).values()];
+    const canEdit = !publicState;
+    return `<div class="blog-shelf-panel"><div class="section-head"><div><h2 class="section-title">Blogs</h2><div class="section-subtitle">Blogs escritos e salvos por esta pessoa.</div></div>${canEdit ? '<button class="small-btn" data-blog-shelf-new>+ Nova coleção</button>' : ""}</div><section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">Escritos</h2><div class="section-subtitle">${authored.length} blog(s)</div></div></div><div class="blog-shelf-grid">${authored.map(post => blogCard(post)).join("") || '<div class="empty">Nenhum blog escrito ainda.</div>'}</div></section><section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">Salvos</h2><div class="section-subtitle">${saved.length} blog(s)</div></div></div><div class="blog-shelf-grid">${saved.map(post => blogCard(post)).join("") || '<div class="empty">Nenhum blog salvo ainda.</div>'}</div></section>${collections.map(collection => blogShelfCollectionMarkup(collection, posts, canEdit)).join("")}</div>`;
+  }
+
+  function openBlogShelfCollectionForm() {
+    const posts = [...new Map([...state.authoredBlogPosts, ...state.savedBlogPosts].map(post => [String(post.id), post])).values()];
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Nova coleção de blogs</h2><div class="section-subtitle">Organize blogs escritos ou salvos.</div></div><button class="small-btn" data-close>Fechar</button></div><form id="blog-shelf-collection-form"><div class="field"><label>Nome da coleção</label><input name="name" maxlength="60" required placeholder="Ex.: Notícias favoritas"></div><div class="field"><label>Blogs</label><div class="collection-picker">${posts.map(post => `<label><input type="checkbox" name="blogIds" value="${escapeHTML(post.id)}"> ${escapeHTML(post.title)}</label>`).join("") || "Salve ou escreva algum blog primeiro."}</div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger" type="submit">Criar coleção</button></div></form></div>`;
+    $("#modal-root").appendChild(overlay);
+    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $("#blog-shelf-collection-form", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const name = String(form.get("name") || "").trim();
+      const blogIds = form.getAll("blogIds");
+      if (!name) return;
+      const result = await sb.from("shelf_collections").insert({ id: `blog-shelf-${Date.now()}`, owner_id: state.session.user.id, name, collection_type: "blog", blog_ids: blogIds, item_ids: [] });
+      if (result.error) return toast("Não foi possível criar a coleção de blogs.");
+      overlay.remove();
+      await loadAccount();
+    };
+  }
+
+  async function deleteBlogShelfCollection(id) {
+    const result = await sb.from("shelf_collections").delete().eq("id", id).eq("owner_id", state.session.user.id);
+    if (result.error) return toast("Não foi possível excluir a coleção.");
+    await loadAccount();
   }
 
   function renderShelfPage() {
@@ -4036,9 +4200,23 @@
         if (!$(".profile-follow-summary", shelfHeading.parentElement)) shelfHeading.insertAdjacentHTML("afterend", followSummary(state.session.user.id, state.followerCount, state.followingCount));
       }
     }
+    if (state.section === "shelf" && state.session) {
+      const shelfHead = $(".content > .section-head");
+      if (shelfHead && !$(".shelf-media-tabs")) {
+        shelfHead.insertAdjacentHTML("afterend", `<div class="shelf-media-tabs"><button class="small-btn ${state.shelfTab === "comics" ? "is-active" : ""}" data-shelf-media="comics">Quadrinhos</button><button class="small-btn ${state.shelfTab === "blogs" ? "is-active" : ""}" data-shelf-media="blogs">Blogs</button></div><div class="shelf-blog-panel-mount"></div>`);
+        $(".shelf-blog-panel-mount").innerHTML = blogShelfPanelMarkup();
+      }
+      $(".content").classList.toggle("shelf-show-blogs", state.shelfTab === "blogs");
+    }
     if (state.section === "public-profile" && state.publicProfile?.profile && !state.publicProfile.collectionId) {
       const publicSummary = $(".public-profile-page > .section-head .section-subtitle");
       if (publicSummary) publicSummary.innerHTML = followSummary(state.publicProfile.profile.id, state.publicProfile.followerCount, state.publicProfile.followingCount);
+      const publicHead = $(".public-profile-page > .section-head");
+      if (publicHead && !$(".public-shelf-media-tabs")) {
+        publicHead.insertAdjacentHTML("afterend", `<div class="shelf-media-tabs public-shelf-media-tabs"><button class="small-btn ${state.publicShelfTab === "comics" ? "is-active" : ""}" data-public-shelf-media="comics">Quadrinhos</button><button class="small-btn ${state.publicShelfTab === "blogs" ? "is-active" : ""}" data-public-shelf-media="blogs">Blogs</button></div><div class="public-shelf-blog-panel-mount"></div>`);
+        $(".public-shelf-blog-panel-mount").innerHTML = blogShelfPanelMarkup(state.publicProfile);
+      }
+      $(".public-profile-page").classList.toggle("shelf-show-blogs", state.publicShelfTab === "blogs");
     }
     if (state.section === "entity" && state.entityFilter?.kind === "publisher" && !$("[data-publisher-filter-form]")) {
       const filter = state.collectionFilter || { field: "all", query: "" };
@@ -4076,27 +4254,60 @@
       if (actions) { const button = document.createElement("button"); button.className = "small-btn"; button.dataset.openChat = "true"; button.textContent = "Enviar mensagem"; actions.prepend(button); }
     }
     $('[data-open-chat]')?.addEventListener("click", () => openChat(state.publicProfile?.profile));
-    $$('[data-blog-tab]').forEach(el => el.addEventListener("click", () => { state.blogTab = el.dataset.blogTab; state.blogOpenId = null; render(); }));
-    $$('[data-blog-open]').forEach(el => el.addEventListener("click", () => { state.blogOpenId = el.dataset.blogOpen; render(); }));
-    $$('[data-blog-read]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); state.blogOpenId = el.dataset.blogRead; render(); }));
-    $('[data-blog-back]')?.addEventListener("click", () => { state.blogOpenId = null; state.blogTab = "recentes"; render(); });
+    $$('[data-blog-tab]').forEach(el => el.addEventListener("click", () => { state.blogTab = el.dataset.blogTab; navigate({ pagina: "blogs" }); }));
+    if (state.section === "blog" && !state.blogOpenId && $(".blogs-page") && !$(".blog-highlights-sidebar")) $(".blogs-page").insertAdjacentHTML("beforeend", blogHighlightsSidebar());
+    $$('[data-blog-open]').forEach(el => el.addEventListener("click", () => navigate({ pagina: "blogs", blog: el.dataset.blogOpen })));
+    $$('[data-blog-read]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); navigate({ pagina: "blogs", blog: el.dataset.blogRead }); }));
+    $('[data-blog-back]')?.addEventListener("click", () => { state.blogOpenId = null; state.blogTab = "recentes"; navigate({ pagina: "blogs" }); });
+    const openedBlog = state.blogOpenId ? state.blogPosts.find(item => String(item.id) === String(state.blogOpenId)) : null;
+    $$(".blog-card").forEach(card => {
+      const post = state.blogPosts.find(item => String(item.id) === String(card.dataset.blogOpen));
+      const meta = $(".blog-card-meta", card);
+      if (post?.author?.username && meta) meta.innerHTML = `<a class="blog-meta-author" href="${escapeHTML(publicProfileHref(post.author.username))}">@${escapeHTML(post.author.username)}</a> · ${escapeHTML(blogDate(post.published_at || post.created_at))}`;
+    });
+    const postMeta = $(".blog-post-page .section-head .section-subtitle");
+    if (openedBlog?.author?.username && postMeta) postMeta.innerHTML = `<a class="blog-meta-author" href="${escapeHTML(publicProfileHref(openedBlog.author.username))}">@${escapeHTML(openedBlog.author.username)}</a> · ${escapeHTML(blogDate(openedBlog.published_at || openedBlog.created_at))}`;
+    $$(".blog-meta-author").forEach(link => link.addEventListener("click", event => event.stopPropagation()));
+    const authorCard = $(".blog-author-card");
+    if (openedBlog && authorCard && !$("[data-blog-inline-comments]")) {
+      authorCard.insertAdjacentHTML("afterend", blogCommentsSection(openedBlog));
+      const commentsSection = $("[data-blog-inline-comments]");
+      loadBlogCommentsSection(openedBlog, commentsSection);
+      $(".blog-inline-comment-form", commentsSection)?.addEventListener("submit", async event => {
+        event.preventDefault();
+        const body = String(new FormData(event.currentTarget).get("body") || "").trim();
+        if (!body) return;
+        const result = await sb.from("blog_comments").insert({ blog_id: openedBlog.id, user_id: state.session.user.id, body });
+        if (result.error) return toast("Não foi possível publicar o comentário.");
+        event.currentTarget.reset();
+        await loadBlogCommentsSection(openedBlog, commentsSection);
+        render();
+      });
+    }
     $$('[data-blog-feature]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleBlogFeatured(el.dataset.blogFeature, el.dataset.blogFeatured === "true"); }));
+    $$('[data-blog-delete]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); deleteBlogPost(el.dataset.blogDelete); }));
     $$('[data-blog-like]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleBlogLike(el.dataset.blogLike); }));
-    $$('[data-blog-comments]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); const post = state.blogPosts.find(item => String(item.id) === String(el.dataset.blogComments)); if (post) openBlogComments(post); }));
-    $$('[data-blog-share]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); const post = state.blogPosts.find(item => String(item.id) === String(el.dataset.blogShare)); if (post) shareBlog(post.id, post.title); }));
+    $$('[data-blog-save]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleBlogSave(el.dataset.blogSave); }));
+    $$('[data-blog-comments]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); const post = findBlogPost(el.dataset.blogComments); if (post) openBlogComments(post); }));
+    $$('[data-blog-share]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); const post = findBlogPost(el.dataset.blogShare); if (post) shareBlog(post.id, post.title); }));
     if ($("#blog-form") && $(".blog-toolbar") && !$("#blog-inline-image")) {
-      $(".blog-toolbar").insertAdjacentHTML("beforeend", '<button type="button" data-blog-command="strikeThrough">Riscado</button><button type="button" data-blog-command="insertOrderedList">1. Lista</button><button type="button" data-blog-command="justifyLeft">Esquerda</button><button type="button" data-blog-command="justifyCenter">Centro</button><button type="button" data-blog-command="justifyRight">Direita</button><button type="button" data-blog-command="undo">Desfazer</button><button type="button" data-blog-command="redo">Refazer</button><button type="button" data-blog-command="removeFormat">Limpar</button><button type="button" data-blog-image>Imagem no texto</button>');
+      $(".blog-toolbar").insertAdjacentHTML("beforeend", '<button type="button" data-blog-command="strikeThrough">Riscado</button><button type="button" data-blog-command="insertOrderedList">1. Lista</button><button type="button" data-blog-command="justifyLeft">Esquerda</button><button type="button" data-blog-command="justifyCenter">Centro</button><button type="button" data-blog-command="justifyRight">Direita</button><button type="button" data-blog-command="undo">Desfazer</button><button type="button" data-blog-command="redo">Refazer</button><button type="button" data-blog-command="removeFormat">Limpar</button><button type="button" data-blog-break-box>Quebrar caixa</button><button type="button" data-blog-image>Imagem no texto</button>');
       $(".blog-toolbar").insertAdjacentHTML("afterend", '<input id="blog-inline-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>');
     }
     $$('[data-blog-command]').forEach(el => el.addEventListener("click", () => {
       const command = el.dataset.blogCommand;
       const value = el.dataset.blogValue;
       if (command === "createLink") {
-        const url = window.prompt("Cole o endereço do link:", "https://");
-        if (url) document.execCommand(command, false, url);
+        openBlogLinkDialog();
       } else document.execCommand(command, false, value || null);
       $("#blog-editor")?.focus();
     }));
+    $('[data-blog-break-box]')?.addEventListener("click", () => {
+      const editor = $("#blog-editor");
+      if (!editor) return;
+      editor.focus();
+      document.execCommand("insertHTML", false, "<p><br></p>");
+    });
     $('[data-blog-image]')?.addEventListener("click", () => {
       const selection = window.getSelection();
       state.blogEditorRange = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
@@ -4119,7 +4330,7 @@
           range.collapse(false);
           selection?.addRange(range);
         }
-        document.execCommand("insertImage", false, url);
+        document.execCommand("insertHTML", false, `<p><br></p><img src="${escapeHTML(url)}" alt="Imagem inserida no artigo"><p><br></p>`);
       } catch (error) {
         toast(error.message || "Não foi possível inserir a imagem.");
       } finally {
@@ -4128,6 +4339,8 @@
       }
     });
     if ($("#blog-form") && $(".blog-image-fields")) $(".blog-image-fields").insertAdjacentHTML("beforebegin", '<p class="format-hint blog-image-hint">Formato recomendado: capa vertical 720×1440; imagens laterais quadradas 900×900. Elas serão exibidas com a capa maior e as duas laterais empilhadas.</p>');
+    const blogForm = $("#blog-form");
+    if (blogForm) $("input[name=cover]", blogForm)?.setAttribute("required", "");
     $("#blog-form")?.addEventListener("submit", event => { event.preventDefault(); publishBlogPost(event.currentTarget); });
     $$('[data-public-collection]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); loadPublicProfile(el.dataset.publicOwner, el.dataset.publicCollection); }));
     $$('[data-publisher-settings]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openPublisherSettings(el.dataset.publisherSettings); }));
@@ -4143,6 +4356,10 @@
       if (item) openCommentsPopup(item);
     }));
     $$('[data-shelf-expand]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); state.shelfExpanded[el.dataset.shelfExpand] = !state.shelfExpanded[el.dataset.shelfExpand]; render(); }));
+    $$('[data-shelf-media]').forEach(el => el.addEventListener("click", () => { state.shelfTab = el.dataset.shelfMedia; render(); }));
+    $$('[data-public-shelf-media]').forEach(el => el.addEventListener("click", () => { state.publicShelfTab = el.dataset.publicShelfMedia; render(); }));
+    $('[data-blog-shelf-new]')?.addEventListener("click", openBlogShelfCollectionForm);
+    $$('[data-blog-shelf-delete]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); deleteBlogShelfCollection(el.dataset.blogShelfDelete); }));
     $('[data-shelf-new-category]')?.addEventListener("click", () => openShelfCategoryForm());
     $$('[data-shelf-edit-category]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openShelfCategoryForm(el.dataset.shelfEditCategory); }));
     $$('[data-shelf-delete-category]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); deleteShelfCategory(el.dataset.shelfDeleteCategory); }));

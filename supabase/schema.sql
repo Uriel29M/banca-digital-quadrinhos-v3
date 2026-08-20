@@ -26,6 +26,7 @@ alter table public.profiles add column if not exists likes_public boolean not nu
 alter table public.profiles add column if not exists allow_mentions boolean not null default true;
 alter table public.profiles add column if not exists allow_messages boolean not null default true;
 alter table public.profiles add column if not exists notifications_enabled boolean not null default true;
+alter table public.profiles add column if not exists shelf_blogs_public boolean not null default true;
 alter table public.profiles drop constraint if exists profiles_plan_check;
 alter table public.profiles add constraint profiles_plan_check check (plan in ('free', 'premium', 'moderator', 'admin'));
 create unique index if not exists profiles_account_email_key on public.profiles(account_email) where account_email is not null;
@@ -72,6 +73,14 @@ create table if not exists public.blog_comments (
   created_at timestamptz not null default now()
 );
 create index if not exists blog_comments_blog_idx on public.blog_comments(blog_id, created_at desc);
+
+create table if not exists public.blog_saves (
+  blog_id bigint not null references public.blog_posts(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (blog_id, user_id)
+);
+create index if not exists blog_saves_user_idx on public.blog_saves(user_id, created_at desc);
 
 insert into storage.buckets (id, name, public) values ('blog-images', 'blog-images', true) on conflict (id) do nothing;
 
@@ -194,6 +203,11 @@ create table if not exists public.shelf_collections (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.shelf_collections add column if not exists collection_type text not null default 'comic';
+alter table public.shelf_collections add column if not exists blog_ids jsonb not null default '[]'::jsonb;
+alter table public.shelf_collections drop constraint if exists shelf_collections_type_check;
+alter table public.shelf_collections add constraint shelf_collections_type_check check (collection_type in ('comic', 'blog'));
 
 insert into public.shelf_collections (id, owner_id, name, cover_url, is_public, item_ids)
 select category->>'id', profiles.id, category->>'name', category->>'coverUrl', coalesce((category->>'isPublic')::boolean, true), coalesce(category->'itemIds', '[]'::jsonb)
@@ -495,6 +509,7 @@ alter table public.publisher_settings enable row level security;
 alter table public.blog_posts enable row level security;
 alter table public.blog_likes enable row level security;
 alter table public.blog_comments enable row level security;
+alter table public.blog_saves enable row level security;
 alter table public.profile_follows enable row level security;
 alter table public.notifications enable row level security;
 alter table public.chat_messages enable row level security;
@@ -521,6 +536,8 @@ drop policy if exists "users manage own blog likes" on public.blog_likes;
 drop policy if exists "blog comments are public" on public.blog_comments;
 drop policy if exists "users create blog comments" on public.blog_comments;
 drop policy if exists "users delete own blog comments" on public.blog_comments;
+drop policy if exists "blog saves are visible" on public.blog_saves;
+drop policy if exists "users manage own blog saves" on public.blog_saves;
 drop policy if exists "profile follows are public" on public.profile_follows;
 drop policy if exists "users manage own follows" on public.profile_follows;
 drop policy if exists "users read own notifications" on public.notifications;
@@ -566,6 +583,8 @@ create policy "users manage own blog likes" on public.blog_likes for all using (
 create policy "blog comments are public" on public.blog_comments for select using (true);
 create policy "users create blog comments" on public.blog_comments for insert with check (auth.uid() = user_id and public.can_comment());
 create policy "users delete own blog comments" on public.blog_comments for delete using (auth.uid() = user_id or public.is_moderator());
+create policy "blog saves are visible" on public.blog_saves for select using (auth.uid() = user_id or exists (select 1 from public.profiles where id = user_id and shelf_blogs_public));
+create policy "users manage own blog saves" on public.blog_saves for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "profile follows are public" on public.profile_follows for select using (true);
 create policy "users manage own follows" on public.profile_follows for all using (auth.uid() = follower_id) with check (auth.uid() = follower_id and follower_id <> following_id);
 create policy "users read own notifications" on public.notifications for select using (auth.uid() = user_id);
