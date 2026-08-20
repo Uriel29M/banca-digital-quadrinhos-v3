@@ -143,7 +143,7 @@ main { min-height: calc(100vh - 150px); }
 .btn-primary { background: white; color: #09090b; }
 .btn-secondary { background: #29292d; color: white; }
 .btn-danger { background: var(--accent); color: white; }
-.btn + .btn { margin-left: 7px; }
+.btn + .btn { margin-left: 0; }
 
 .content {
   max-width: var(--max);
@@ -270,7 +270,7 @@ main { min-height: calc(100vh - 150px); }
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 17px;
 }
-.shelf-section-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.shelf-section-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .shelf-categories { border-top: 1px solid var(--line); padding-top: 25px; }
 .shelf-categories > .shelf-collection { margin-left: 18px; }
 .shelf-visibility { align-self: center; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
@@ -651,13 +651,63 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .profile-follow-summary { margin-top: 8px; color: var(--muted); font-size: 12px; }
 .profile-follow-link { padding: 0; border: 0; background: transparent; color: #ff8990; font: inherit; cursor: pointer; }
 .profile-follow-link:hover { color: #fff; text-decoration: underline; }
+.profile-privacy-settings { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #15151a; }
+.profile-privacy-settings > label:first-child { color: #ffd45c; font-size: 12px; font-weight: 700; }
 .trophy-room { display: flex; align-items: center; gap: 7px; max-width: 100%; margin-top: 6px; padding: 5px 7px; border: 1px solid #3a343e; border-radius: 7px; background: linear-gradient(145deg, #211c24, #151519); }
 .trophy-room-title { flex: 0 0 auto; color: #ffd45c; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .trophy-empty { color: var(--muted); font-size: 11px; }
 .achievement-list { display: flex; flex-wrap: nowrap; gap: 4px; min-width: 0; margin: 0; overflow-x: auto; scrollbar-width: none; }
 .achievement-list::-webkit-scrollbar { display: none; }
 .achievement-list span { flex: 0 0 auto; padding: 3px 5px; background: #25252b; border-radius: 4px; color: #d7d7dc; font-size: 10px; white-space: nowrap; }
-.profile-actions { display: flex; gap: 7px; margin-left: auto; }
+.profile-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.shelf-page .profile-header {
+  margin-bottom: 22px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(135deg, #1a171c, #111116);
+}
+.shelf-page > .section-head {
+  align-items: flex-end;
+  margin-bottom: 24px;
+  padding: 20px 22px;
+  border: 1px solid #33252b;
+  border-radius: 14px;
+  background: linear-gradient(110deg, rgba(99, 28, 38, .72), rgba(25, 20, 26, .9) 65%);
+}
+.shelf-page > .section-head .section-title { font-size: clamp(24px, 3vw, 32px); letter-spacing: -.03em; }
+.shelf-page > .section-head .section-subtitle { margin-top: 5px; }
+.shelf-page > .section-head .profile-follow-summary { margin-top: 9px; }
+.shelf-page > .section-head > .btn { min-height: 38px; white-space: nowrap; }
+.shelf-page > .notice { margin-bottom: 28px; border-left: 3px solid var(--accent); background: #17151a; }
+.shelf-page .shelf-collection { padding: 4px 0 28px; border-bottom: 1px solid rgba(255,255,255,.07); }
+.shelf-page .shelf-collection:last-of-type { border-bottom: 0; }
+.shelf-page .shelf-collection .section-head { margin-bottom: 12px; }
+.shelf-page .shelf-collection .section-title { font-size: 19px; }
+.shelf-page .shelf-categories { margin-top: 4px; padding-top: 28px; }
+.shelf-page .section-head .btn,
+.shelf-page .section-head .small-btn,
+.shelf-page .profile-actions .btn,
+.shelf-page .profile-actions .small-btn { margin: 0; }
+.shelf-page .shelf-collection .section-head { align-items: flex-start; }
+.shelf-page .shelf-collection .shelf-section-actions { max-width: 48%; }
+.public-profile-page .profile-actions,
+.public-profile-page .shelf-section-actions { align-items: center; gap: 8px; flex-wrap: wrap; }
+.public-profile-page .section-head .small-btn,
+.public-profile-page .section-head .btn,
+.public-profile-page .profile-actions .small-btn,
+.public-profile-page .profile-actions .btn { margin: 0; }
+.public-profile-page .shelf-collection .section-head { align-items: flex-start; }
+.public-profile-page .shelf-collection .shelf-section-actions { max-width: 48%; }
+@media (max-width: 600px) {
+  .shelf-page .profile-header { align-items: flex-start; padding: 16px; }
+  .shelf-page > .section-head { align-items: stretch; padding: 17px; }
+  .shelf-page > .section-head > .btn { width: 100%; }
+  .shelf-page .shelf-collection .section-head { align-items: flex-start; }
+  .shelf-page .shelf-collection .shelf-section-actions { max-width: none; width: 100%; justify-content: flex-start; }
+  .public-profile-page .profile-actions { width: 100%; margin-left: 0; justify-content: flex-start; }
+  .public-profile-page .shelf-collection .shelf-section-actions { max-width: none; width: 100%; justify-content: flex-start; }
+}
 .small-btn {
   border: 1px solid #36363d; background: #202025; color: white;
   border-radius: 6px; padding: 6px 8px; font-size: 11px;

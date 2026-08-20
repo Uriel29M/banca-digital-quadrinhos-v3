@@ -21,6 +21,10 @@ alter table public.profiles add column if not exists shelf_categories jsonb not 
 alter table public.profiles add column if not exists profile_hidden boolean not null default false;
 alter table public.profiles add column if not exists is_banned boolean not null default false;
 alter table public.profiles add column if not exists silenced_until timestamptz;
+alter table public.profiles add column if not exists likes_public boolean not null default true;
+alter table public.profiles add column if not exists allow_mentions boolean not null default true;
+alter table public.profiles add column if not exists allow_messages boolean not null default true;
+alter table public.profiles add column if not exists notifications_enabled boolean not null default true;
 alter table public.profiles drop constraint if exists profiles_plan_check;
 alter table public.profiles add constraint profiles_plan_check check (plan in ('free', 'premium', 'moderator', 'admin'));
 create unique index if not exists profiles_account_email_key on public.profiles(account_email) where account_email is not null;
@@ -77,7 +81,7 @@ create or replace function public.create_notification(
 returns void language plpgsql security definer set search_path = public
 as $$
 begin
-  if p_user_id is null or p_user_id = p_actor_id then return; end if;
+  if p_user_id is null or p_user_id = p_actor_id or not exists (select 1 from public.profiles where id = p_user_id and notifications_enabled) then return; end if;
   insert into public.notifications(user_id, actor_id, type, title, body, href, metadata)
   values (p_user_id, p_actor_id, p_type, p_title, p_body, p_href, coalesce(p_metadata, '{}'::jsonb));
 end;
@@ -292,7 +296,7 @@ declare
 begin
   for v_mentioned in select distinct lower((regexp_matches(NEW.body, '@([A-Za-z0-9_]{3,24})', 'gi'))[1]) as username loop
     select id into v_mentioned_id from public.profiles where lower(username) = v_mentioned.username limit 1;
-    if v_mentioned_id is not null and v_mentioned_id <> NEW.sender_id then
+    if v_mentioned_id is not null and v_mentioned_id <> NEW.sender_id and exists (select 1 from public.profiles where id = v_mentioned_id and allow_mentions) then
       perform public.create_notification(
         v_mentioned_id,
         'chat_mention',
@@ -344,7 +348,7 @@ begin
   end if;
   for v_mentioned in select distinct lower((regexp_matches(NEW.body, '@([A-Za-z0-9_]{3,24})', 'gi'))[1]) as username loop
     select id into v_mentioned_id from public.profiles where lower(username) = v_mentioned.username limit 1;
-    if v_mentioned_id is not null then
+    if v_mentioned_id is not null and exists (select 1 from public.profiles where id = v_mentioned_id and allow_mentions) then
       perform public.create_notification(v_mentioned_id, 'mention', 'Você foi mencionado', 'Alguém mencionou você em um comentário.', NEW.user_id, null, jsonb_build_object('item_id', NEW.item_id, 'comment_id', NEW.id));
     end if;
     v_mentioned_id := null;
@@ -514,7 +518,7 @@ create policy "users send chat messages" on public.chat_messages for insert with
   and expires_at <= now() + interval '24 hours'
   and expires_at > now()
   and (
-    (room_id is null and recipient_id is not null and auth.uid() <> recipient_id)
+    (room_id is null and recipient_id is not null and auth.uid() <> recipient_id and exists (select 1 from public.profiles where id = recipient_id and allow_messages))
     or (room_id is not null and recipient_id is null and public.can_access_chat_room(room_id))
   )
 );
@@ -522,9 +526,13 @@ create policy "participants delete chat messages" on public.chat_messages for de
 create policy "users update own profile" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists "admins update user plans" on public.profiles;
 create policy "admins update user plans" on public.profiles for update using (public.is_admin()) with check (public.is_admin());
-create policy "favorites are public" on public.favorites for select using (true);
+create policy "favorites are public" on public.favorites for select using (
+  auth.uid() = user_id or exists (select 1 from public.profiles where id = user_id and likes_public)
+);
 create policy "users manage own favorites" on public.favorites for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create policy "comic likes are public" on public.comic_likes for select using (true);
+create policy "comic likes are public" on public.comic_likes for select using (
+  auth.uid() = user_id or exists (select 1 from public.profiles where id = user_id and likes_public)
+);
 create policy "users manage own comic likes" on public.comic_likes for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "reading progress is public" on public.reading_progress for select using (true);
 create policy "users manage own reading progress" on public.reading_progress for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
