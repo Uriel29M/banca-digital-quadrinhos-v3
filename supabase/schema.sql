@@ -44,6 +44,13 @@ create table if not exists public.favorites (
   primary key (user_id, item_id)
 );
 
+create table if not exists public.comic_likes (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  item_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, item_id)
+);
+
 create table if not exists public.reading_progress (
   user_id uuid not null references public.profiles(id) on delete cascade,
   item_id text not null,
@@ -122,6 +129,7 @@ grant execute on function public.get_login_email(text) to anon, authenticated;
 
 alter table public.profiles enable row level security;
 alter table public.favorites enable row level security;
+alter table public.comic_likes enable row level security;
 alter table public.reading_progress enable row level security;
 alter table public.shelf_collections enable row level security;
 alter table public.shelf_collection_likes enable row level security;
@@ -134,6 +142,8 @@ drop policy if exists "users update own profile" on public.profiles;
 drop policy if exists "users read own favorites" on public.favorites;
 drop policy if exists "favorites are public" on public.favorites;
 drop policy if exists "users manage own favorites" on public.favorites;
+drop policy if exists "comic likes are public" on public.comic_likes;
+drop policy if exists "users manage own comic likes" on public.comic_likes;
 drop policy if exists "reading progress is public" on public.reading_progress;
 drop policy if exists "users manage own reading progress" on public.reading_progress;
 drop policy if exists "public collections are visible" on public.shelf_collections;
@@ -154,6 +164,8 @@ drop policy if exists "admins update user plans" on public.profiles;
 create policy "admins update user plans" on public.profiles for update using (public.is_admin()) with check (public.is_admin());
 create policy "favorites are public" on public.favorites for select using (true);
 create policy "users manage own favorites" on public.favorites for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "comic likes are public" on public.comic_likes for select using (true);
+create policy "users manage own comic likes" on public.comic_likes for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "reading progress is public" on public.reading_progress for select using (true);
 create policy "users manage own reading progress" on public.reading_progress for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "public collections are visible" on public.shelf_collections for select using (is_public or auth.uid() = owner_id);
