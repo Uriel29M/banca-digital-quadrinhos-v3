@@ -25,6 +25,14 @@ alter table public.profiles drop constraint if exists profiles_plan_check;
 alter table public.profiles add constraint profiles_plan_check check (plan in ('free', 'premium', 'moderator', 'admin'));
 create unique index if not exists profiles_account_email_key on public.profiles(account_email) where account_email is not null;
 
+create table if not exists public.profile_follows (
+  follower_id uuid not null references public.profiles(id) on delete cascade,
+  following_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (follower_id, following_id),
+  check (follower_id <> following_id)
+);
+
 create table if not exists public.shelf_collections (
   id text primary key,
   owner_id uuid not null references public.profiles(id) on delete cascade,
@@ -163,6 +171,7 @@ as $$ select account_email from public.profiles where lower(username) = lower(p_
 grant execute on function public.get_login_email(text) to anon, authenticated;
 
 alter table public.profiles enable row level security;
+alter table public.profile_follows enable row level security;
 alter table public.favorites enable row level security;
 alter table public.comic_likes enable row level security;
 alter table public.reading_progress enable row level security;
@@ -175,6 +184,8 @@ alter table public.achievements enable row level security;
 alter table public.user_achievements enable row level security;
 
 drop policy if exists "profiles are public" on public.profiles;
+drop policy if exists "profile follows are public" on public.profile_follows;
+drop policy if exists "users manage own follows" on public.profile_follows;
 drop policy if exists "users update own profile" on public.profiles;
 drop policy if exists "users read own favorites" on public.favorites;
 drop policy if exists "favorites are public" on public.favorites;
@@ -200,6 +211,8 @@ drop policy if exists "admins manage achievements" on public.achievements;
 drop policy if exists "admins award achievements" on public.user_achievements;
 
 create policy "profiles are public" on public.profiles for select using (not profile_hidden or auth.uid() = id or public.is_moderator());
+create policy "profile follows are public" on public.profile_follows for select using (true);
+create policy "users manage own follows" on public.profile_follows for all using (auth.uid() = follower_id) with check (auth.uid() = follower_id and follower_id <> following_id);
 create policy "users update own profile" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists "admins update user plans" on public.profiles;
 create policy "admins update user plans" on public.profiles for update using (public.is_admin()) with check (public.is_admin());

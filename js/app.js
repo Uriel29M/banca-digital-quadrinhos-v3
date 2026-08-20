@@ -234,6 +234,9 @@
     const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids").eq("owner_id", profile.data.id).order("created_at", { ascending: true });
     const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", profile.data.id);
     const likes = await sb.from("shelf_collection_likes").select("collection_id, user_id").eq("owner_id", profile.data.id);
+    const followers = await sb.from("profile_follows").select("follower_id").eq("following_id", profile.data.id);
+    const following = await sb.from("profile_follows").select("following_id").eq("follower_id", profile.data.id);
+    const isFollowing = state.session?.user?.id ? (followers.data || []).some(row => row.follower_id === state.session.user.id) : false;
     const moderationHistory = ["moderator", "admin"].includes(state.profile?.plan)
       ? await sb.from("moderation_actions").select("id, actor_id, action, duration_until, details, created_at").eq("target_id", profile.data.id).order("created_at", { ascending: false })
       : { data: [] };
@@ -252,6 +255,9 @@
       collectionLikes,
       collectionLikeCounts
       ,moderationHistory: (moderationHistory.data || []).map(entry => ({ ...entry, actor_username: actorNames.get(entry.actor_id) || "moderador" }))
+      ,isFollowing
+      ,followerCount: (followers.data || []).length
+      ,followingCount: (following.data || []).length
     };
     render();
   }
@@ -2830,6 +2836,21 @@
     await loadPublicProfile(state.publicProfile.profile.username);
   }
 
+  async function toggleProfileFollow(profile) {
+    if (!state.session) return openAuthPage();
+    if (!profile?.id || profile.id === state.session.user.id) return;
+    const publicState = state.publicProfile;
+    const following = Boolean(publicState?.isFollowing);
+    const query = sb.from("profile_follows");
+    const result = following
+      ? await query.delete().eq("follower_id", state.session.user.id).eq("following_id", profile.id)
+      : await query.insert({ follower_id: state.session.user.id, following_id: profile.id });
+    if (result.error) return toast("Não foi possível atualizar o acompanhamento.");
+    publicState.isFollowing = !following;
+    publicState.followerCount = Math.max(0, (publicState.followerCount || 0) + (following ? -1 : 1));
+    render();
+  }
+
   function renderPublicProfilePage() {
     const publicState = state.publicProfile;
     if (!publicState || publicState.loading) return '<div class="content"><div class="empty">Carregando perfil...</div></div>';
@@ -2844,6 +2865,7 @@
     if (publicState.collectionId && selectedCategory) return renderPublicCollectionPage(publicState, selectedCategory);
     if (publicState.collectionId && !selectedCategory) return `<div class="content"><div class="empty">Esta coleção não existe ou é privada.</div><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username))}">Voltar ao perfil</a></div>`;
     const canModerate = ["moderator", "admin"].includes(state.profile?.plan) && !["moderator", "admin"].includes(profile.plan);
+    const canFollow = Boolean(state.session?.user?.id && state.session.user.id !== profile.id);
     return `<div class="content public-profile-page">
       <div class="profile-header">
         ${avatarMarkup(profile)}
@@ -2853,7 +2875,7 @@
           ${trophyRoom(publicState.achievements)}
         </div>
       </div>
-      <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">Coleções públicas do perfil</div></div><div class="profile-actions"><button class="small-btn" data-section="home">Voltar ao início</button>${canModerate ? `<button class="small-btn moderation-button" data-open-moderation>Moderação</button>` : ""}</div></div>
+      <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">${publicState.followerCount || 0} seguidores · ${publicState.followingCount || 0} seguindo · Coleções públicas do perfil</div></div><div class="profile-actions">${canFollow ? `<button class="small-btn follow-button ${publicState.isFollowing ? "is-following" : ""}" data-follow-profile>${publicState.isFollowing ? "Seguindo" : "Seguir"}</button>` : ""}<button class="small-btn" data-section="home">Voltar ao início</button>${canModerate ? `<button class="small-btn moderation-button" data-open-moderation>Moderação</button>` : ""}</div></div>
       ${savedVisible ? shelfCollectionMarkup("Salvos", savedItems, "public-saved", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Salvos está oculta neste perfil.</div>'}
       ${readVisible ? shelfCollectionMarkup("Lidos", readItems, "public-read", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Lidos está oculta neste perfil.</div>'}
       ${publicCategories.map(category => { const items = uniqueCatalogItems(state.db.library.filter(item => (category.itemIds || []).includes(item.id) && publicState.favoriteIds.has(item.id))); const liked = publicState.collectionLikes?.has(category.id); const likes = publicState.collectionLikeCounts?.get(category.id) || 0; return shelfCollectionMarkup(category.name, items, `public-category:${category.id}`, publicState.readingProgress, publicState.favoriteIds, `<span class="shelf-visibility is-public">Pública</span><button class="small-btn ${liked ? "is-liked" : ""}" data-like-collection="${escapeHTML(category.id)}" data-like-owner="${escapeHTML(profile.id)}">${liked ? "♥" : "♡"} ${likes}</button><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username, category.id))}">Abrir coleção</a><button class="small-btn" data-copy-collection="${escapeHTML(category.id)}" data-copy-username="${escapeHTML(profile.username)}">Compartilhar</button>`); }).join("")}
@@ -2967,18 +2989,24 @@
     hydrateHomeCovers();
   }
 
+  function syncActiveNav() {
+    const navSection = { comic: "comics", collection: "collections" }[state.section] || state.section;
+    $$(".nav-link").forEach(button => button.classList.toggle("active", button.dataset.section === navSection));
+  }
+
   function setSection(section) {
     if (!handlingRoute && sectionRoutes[section] !== undefined) {
       setSectionRoute(section);
       return;
     }
     state.section = section;
-    $$(".nav-link").forEach(btn => btn.classList.toggle("active", btn.dataset.section === section || (section === "comic" && btn.dataset.section === "comics")));
+    syncActiveNav();
     render();
     window.scrollTo({top:0, behavior:"smooth"});
   }
 
   function bind() {
+    syncActiveNav();
     const canManage = state.profile?.plan === "admin";
     const isAdmin = state.profile?.plan === "admin";
     const headerAvatar = $(".avatar");
@@ -3034,6 +3062,7 @@
       openModerationPanel(target);
       setTimeout(() => attachPlanControl($(".moderation-modal")?.closest(".modal-backdrop"), target), 0);
     });
+    $('[data-follow-profile]')?.addEventListener("click", () => toggleProfileFollow(state.publicProfile?.profile));
     $("[data-collection-filter-form]")?.addEventListener("submit", event => { event.preventDefault(); const form = new FormData(event.currentTarget); state.collectionFilter = { field: String(form.get("field") || "all"), query: String(form.get("query") || "") }; render(); });
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
       const item = state.db.library.find(x => x.id === el.dataset.open);

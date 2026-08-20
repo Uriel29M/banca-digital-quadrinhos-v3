@@ -518,6 +518,8 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .moderation-history-item span { color: var(--muted); }
 .moderation-button { border-color: #a98422; background: #332b16; color: #ffd45c; }
 .moderation-button:hover { border-color: #ffd45c; background: #4a3d18; color: #fff3b0; }
+.follow-button { border-color: #4a8dbe; background: #182b3a; color: #8fd0ff; }
+.follow-button:hover, .follow-button.is-following { border-color: #72c4ff; background: #234767; color: white; }
 .comment-author-row { display: flex; align-items: center; gap: 7px; }
 .comment-avatar { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); }
 .comment-author-info { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-width: 0; }
