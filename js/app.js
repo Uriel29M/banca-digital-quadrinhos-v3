@@ -2403,7 +2403,7 @@
       if (a === "random") openItem(weightedRandom(uniqueCatalogItems(state.db.library)));
       if (a === "focus-search") { setSection("search"); setTimeout(() => $("#search-input")?.focus(), 30); }
       if (a === "do-search") { state.search = $("#search-input")?.value || ""; render(); $("#search-input")?.focus(); }
-      if (a === "open-admin") { if (canManage) openAdmin(); else toast("A administração é exclusiva para contas admin."); }
+      if (a === "open-admin") { if (canManage) openAdmin(); }
       if (a === "open-auth") state.session ? setSection("shelf") : openAuthPage();
       if (a === "logout") signOut();
       if (a === "profile") openProfileSettings();
