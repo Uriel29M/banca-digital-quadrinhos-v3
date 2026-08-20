@@ -32,6 +32,9 @@
         merged.issue = "3";
         merged.fileUrl = "https://www.mediafire.com/file/jixe3r7igaresw9/Arlequina_003_%25282021%2529_%2528S%25C3%25B3Quadrinhos%2529.cbr/file";
       }
+      if (String(merged.id || "").startsWith("fury-of-firestorm-2026-") && !String(merged.fileUrl || "").endsWith("/file")) {
+        merged.fileUrl = `${merged.fileUrl}/file`;
+      }
       merged.seriesTitle = item.seriesTitle || definition.name || definition.seriesTitle;
       merged.title = item.title || merged.seriesTitle;
       return merged;
@@ -50,6 +53,25 @@
       if (compact.seriesTitle === definition.name || compact.seriesTitle === definition.seriesTitle) delete compact.seriesTitle;
       if (compact.title === definition.name || compact.title === definition.seriesTitle) delete compact.title;
       return compact;
+    });
+  }
+
+  function clearGeneratedCoverCache() {
+    const keys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith("banca-cover:")) keys.push(key);
+    }
+    keys.forEach(key => localStorage.removeItem(key));
+  }
+
+  function storageSafeLibrary(items = []) {
+    return compactSeriesItems(items).map(item => {
+      const safe = { ...item };
+      if (/^data:/i.test(String(safe.cover || ""))) delete safe.cover;
+      if (/^data:/i.test(String(safe.coverUrl || ""))) delete safe.coverUrl;
+      if (/^data:/i.test(String(safe.featuredCoverUrl || ""))) delete safe.featuredCoverUrl;
+      return safe;
     });
   }
 
@@ -80,7 +102,18 @@
       return fresh;
     },
     save(db) {
-      localStorage.setItem(DB_KEY, JSON.stringify({ ...db, library: compactSeriesItems(db.library) }));
+      const payload = JSON.stringify({ ...db, library: storageSafeLibrary(db.library) });
+      try {
+        localStorage.setItem(DB_KEY, payload);
+      } catch (error) {
+        if (error?.name !== "QuotaExceededError") throw error;
+        clearGeneratedCoverCache();
+        try {
+          localStorage.setItem(DB_KEY, payload);
+        } catch (retryError) {
+          console.warn("Catálogo local maior que a cota do navegador; alterações locais não foram persistidas.", retryError);
+        }
+      }
     }
   };
 
@@ -254,6 +287,17 @@
 
   function appAssetUrl(path) {
     return new URL(String(path).replace(/^\/+/, ""), document.baseURI).href;
+  }
+
+  let libarchiveModulePromise = null;
+  function loadLibarchiveModule() {
+    if (!libarchiveModulePromise) {
+      libarchiveModulePromise = import(appAssetUrl("libarchive/libarchive.js")).catch(error => {
+        libarchiveModulePromise = null;
+        throw error;
+      });
+    }
+    return libarchiveModulePromise;
   }
 
   function publicProfileHref(username, collectionId = "") {
@@ -1769,7 +1813,16 @@
     let archive = null;
     let objectUrls = null; // For continuous scroll
 
+    function showCbrProgress(message, value = null, detail = "") {
+      const progress = value === null
+        ? `<div class="reader-loading"><div class="reader-loading-label">${escapeHTML(message)}</div><div class="reader-spinner"></div></div>`
+        : `<div class="reader-loading"><div class="reader-loading-label">${escapeHTML(message)}</div><progress class="reader-progress" max="100" value="${Math.max(0, Math.min(100, value))}"></progress><div class="reader-loading-detail">${escapeHTML(detail)}</div></div>`;
+      body.innerHTML = progress;
+    }
+
     function status(message) {
+      showCbrProgress(message);
+      return;
       body.innerHTML = `
       <div class="empty" style="margin:auto;max-width:650px">
         ${escapeHTML(message)}
@@ -1831,7 +1884,7 @@
         method: "GET",
         mode: "cors",
         credentials: "omit",
-        cache: "no-store"
+        cache: "default"
       });
 
       console.log("[CBR] HTTP:", response.status);
@@ -1847,7 +1900,30 @@
 
       status("Lendo arquivo CBR…");
 
-      const buffer = await response.arrayBuffer();
+      const totalBytes = Number(response.headers.get("content-length")) || 0;
+      const formatCbrBytes = bytes => bytes >= 1024 * 1024
+        ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+        : `${Math.round(bytes / 1024)} KB`;
+      let buffer;
+      if (response.body?.getReader) {
+        const reader = response.body.getReader();
+        const chunks = [];
+        let receivedBytes = 0;
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          chunks.push(part.value);
+          receivedBytes += part.value.byteLength;
+          const value = totalBytes ? (receivedBytes / totalBytes) * 100 : null;
+          showCbrProgress("Lendo arquivo CBR…", value, totalBytes ? `${formatCbrBytes(receivedBytes)} de ${formatCbrBytes(totalBytes)}` : formatCbrBytes(receivedBytes));
+        }
+        const bytes = new Uint8Array(receivedBytes);
+        let offset = 0;
+        chunks.forEach(chunk => { bytes.set(chunk, offset); offset += chunk.byteLength; });
+        buffer = bytes.buffer;
+      } else {
+        buffer = await response.arrayBuffer();
+      }
 
       console.log(
         "[CBR] Tamanho:",
@@ -1889,6 +1965,7 @@
         isRAR5 ? "RAR5" :
         isRAR4 ? "RAR4" :
         "UNKNOWN";
+      const isZipContainer = bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04;
 
       console.log(
         "[CBR] Formato detectado:",
@@ -1900,7 +1977,11 @@
       } else if (rarVersion === "RAR4") {
         status("RAR4 detectado. Preparando leitor…");
       } else {
-        throw new Error("CBR_INVALID_SIGNATURE");
+        if (isZipContainer) {
+          status("Arquivo ZIP detectado. Abrindo como CBZ…");
+          return renderCBZReader(item, url, body, controls, overlay, skipCover, resumePage, onPageChange);
+        }
+        status("Formato compactado detectado. Preparando leitor…");
       }
 
       // =========================================================
@@ -1919,25 +2000,14 @@
       console.log("[CBR] WORKER:", LIBARCHIVE_WORKER);
       console.log("[CBR] WASM:", LIBARCHIVE_WASM);
 
-      const mainResponse = await fetch(LIBARCHIVE_MAIN, { cache: "no-store" });
-      console.log("[CBR] MAIN HTTP:", mainResponse.status, mainResponse.headers.get("content-type"));
-      if (!mainResponse.ok) {
-        throw new Error(`LIBARCHIVE_MAIN_MISSING: HTTP ${mainResponse.status}`);
-      }
-
-      const workerResponse = await fetch(LIBARCHIVE_WORKER, { cache: "no-store" });
-      console.log("[CBR] WORKER HTTP:", workerResponse.status, workerResponse.headers.get("content-type"));
-      if (!workerResponse.ok) {
-        throw new Error(`LIBARCHIVE_WORKER_MISSING: HTTP ${workerResponse.status}`);
-      }
-
-      const wasmResponse = await fetch(LIBARCHIVE_WASM, { method: "GET", cache: "no-store" });
-      console.log("[CBR] WASM HTTP:", wasmResponse.status, wasmResponse.headers.get("content-type"));
-      if (!wasmResponse.ok) {
-        throw new Error(
-          `LIBARCHIVE_WASM_MISSING: HTTP ${wasmResponse.status}`
-        );
-      }
+      const [mainResponse, workerResponse, wasmResponse] = await Promise.all([
+        fetch(LIBARCHIVE_MAIN, { cache: "default" }),
+        fetch(LIBARCHIVE_WORKER, { cache: "default" }),
+        fetch(LIBARCHIVE_WASM, { cache: "default" })
+      ]);
+      if (!mainResponse.ok) throw new Error(`LIBARCHIVE_MAIN_MISSING: HTTP ${mainResponse.status}`);
+      if (!workerResponse.ok) throw new Error(`LIBARCHIVE_WORKER_MISSING: HTTP ${workerResponse.status}`);
+      if (!wasmResponse.ok) throw new Error(`LIBARCHIVE_WASM_MISSING: HTTP ${wasmResponse.status}`);
 
       // =========================================================
       // 4. IMPORTAR LIBARCHIVE
@@ -1945,9 +2015,7 @@
 
       status("Carregando biblioteca CBR…");
 
-      const module = await import(
-        LIBARCHIVE_MAIN
-      );
+      const module = await loadLibarchiveModule();
 
       console.log(
         "[CBR] módulo carregado:",
@@ -2733,7 +2801,7 @@
     return availableTotal > 1 ? `${issue}/${availableTotal}` : issue;
   }
 
-  function rail(title, items, subtitle = "", actionText = "") {
+  function rail(title, items, subtitle = "", actionText = "", directOpen = false) {
     if (!items.length) return "";
     return `
       <section class="section">
@@ -2744,7 +2812,7 @@
           </div>
           ${actionText ? `<button class="link-btn" data-section="search">${escapeHTML(actionText)} →</button>` : ""}
         </div>
-        <div class="rail">${uniqueCatalogItems(items).map(item => card(item)).join("")}</div>
+        <div class="rail">${uniqueCatalogItems(items).map(item => card(item, state.readingProgress, state.favoriteIds, directOpen)).join("")}</div>
       </section>`;
   }
 
@@ -2766,19 +2834,19 @@
     return `
       <section class="hero">
         <div class="hero-bg" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-size="hero" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')"></div>
-        <div class="hero-cover" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-size="hero" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')" aria-hidden="true"></div>
+        <div class="hero-cover" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-size="hero" data-open="${escapeHTML(heroItem?.id || "")}" data-open-direct="true" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')" aria-label="Abrir quadrinho em destaque"></div>
         <div class="hero-content">
           <div class="eyebrow">Destaque da banca</div>
           <h1>${escapeHTML(heroItem?.title || "Sua banca digital")}</h1>
           <div class="hero-meta">${escapeHTML(heroItem?.issue || "")} · ${formatType(heroItem?.type || "comic")} · ${escapeHTML(String(heroItem?.year || ""))}</div>
           <p>${escapeHTML(heroItem?.description || "Publique e descubra quadrinhos sem precisar armazenar os arquivos no servidor.")}</p>
-          ${heroItem ? `<button class="btn btn-primary" data-open="${escapeHTML(heroItem.id)}">▶ Ler agora</button>` : ""}
+          ${heroItem ? `<button class="btn btn-primary" data-open="${escapeHTML(heroItem.id)}" data-open-direct="true">▶ Ler agora</button>` : ""}
           <button class="btn btn-secondary" data-action="random">🎲 Surpreenda-me</button>
         </div>
       </section>
       <div class="content">
         ${rail("Mais lidos", mostClicked, "As edições que mais receberam cliques.", "Ver catálogo")}
-        ${rail("Escolha aleatória", randoms, "Como escolher uma revista numa banca: você nunca sabe o que vai encontrar.")}
+        ${rail("Escolha aleatória", randoms, "Como escolher uma revista numa banca: você nunca sabe o que vai encontrar.", "", true)}
         ${rail("Quadrinhos", comics)}
         ${renderCollectionsPreview()}
       </div>`;
@@ -3363,7 +3431,7 @@
     $$("[data-action]").forEach(el => el.addEventListener("click", () => {
       const a = el.dataset.action;
       if (a === "home") setSection("home");
-      if (a === "random") openItem(weightedRandom(uniqueCatalogItems(state.db.library)));
+      if (a === "random") openReader(weightedRandom(state.db.library));
       if (a === "focus-search") { setSection("search"); setTimeout(() => $("#search-input")?.focus(), 30); }
       if (a === "do-search") { state.search = $("#search-input")?.value || ""; navigate({ pagina: "pesquisar", q: state.search }); }
       if (a === "open-admin") { if (canManage) openAdmin(); }
@@ -3873,6 +3941,9 @@
   }
   if (initialPublicUsername) render();
   else applyRoute();
+  const warmLibarchive = () => loadLibarchiveModule().catch(error => console.warn("Biblioteca CBR indisponível:", error));
+  if ("requestIdleCallback" in window) window.requestIdleCallback(warmLibarchive, { timeout: 4000 });
+  else window.setTimeout(warmLibarchive, 2500);
   sb?.auth.onAuthStateChange((event, session) => {
     if (event === "PASSWORD_RECOVERY") {
       state.session = session;

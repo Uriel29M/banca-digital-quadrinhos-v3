@@ -205,6 +205,46 @@ window.DEFAULT_SERIES.push({
   tags: ["Superman", "Jon Kent", "Val-Zod", "Ultraman", "multiverso", "super-herói"]
 });
 
+window.DEFAULT_SERIES.push({
+  id: "series-birds-of-prey-2023",
+  name: "Aves de Rapina",
+  seriesTitle: "Aves de Rapina",
+  originalTitle: "Birds of Prey",
+  type: "comic",
+  publisher: "DC Comics",
+  imprint: "2023-",
+  publication: "Mensal",
+  status: "Em Andamento",
+  editions: "—",
+  year: 2023,
+  description: "Dinah Lance reforma as Aves de Rapina para uma missão pessoal e aparentemente impossível. Ao lado de Cassandra Cain, Grande Barda, Devota e Arlequina, a Canário Negro precisa realizar uma extração sem derramamento de sangue. Kelly Thompson estreia como roteirista no Universo DC, acompanhada por Leonardo Romero e Jordie Bellaire.",
+  coverUrl: "",
+  telegramUrl: "",
+  author: "Kelly Thompson / Leonardo Romero / Jordie Bellaire",
+  character: "Canário Negro",
+  tags: ["Aves de Rapina", "Birds of Prey", "Canário Negro", "Cassandra Cain", "Grande Barda", "Arlequina", "super-herói"]
+});
+
+window.DEFAULT_SERIES.push({
+  id: "series-fury-of-firestorm-2026",
+  name: "A Fúria do Nuclear",
+  seriesTitle: "A Fúria do Nuclear",
+  originalTitle: "The Fury of Firestorm",
+  type: "comic",
+  publisher: "DC Comics",
+  imprint: "2026-",
+  publication: "Mensal",
+  status: "Em Andamento",
+  editions: "—",
+  year: 2026,
+  description: "A comunidade de Bedford, Colorado, parece uma pequena cidade tranquila, mas tudo muda quando o Homem Nuclear chega e começa a experimentar. Prédios viram areia e pessoas são transformadas em vidro. O que levou Ronnie Raymond a cometer esses atos e alguém conseguirá conter a fúria do Nuclear?",
+  coverUrl: "",
+  telegramUrl: "",
+  author: "",
+  character: "Nuclear",
+  tags: ["Nuclear", "Firestorm", "Ronnie Raymond", "Bedford", "super-herói"]
+});
+
 window.DEFAULT_LIBRARY = [
   {
     id: "hq-001",
@@ -428,6 +468,12 @@ window.DEFAULT_LIBRARY = [
   { id: "adventures-superman-jon-kent-004", seriesId: "series-adventures-superman-jon-kent", title: "As Aventuras do Superman – Jon Kent", issue: "4", format: "cbr", fileUrl: "https://www.mediafire.com/file/blgq99nk6xpknfw/AdvSMJK%25234_%25282023%2529%2528ZF-SQ%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "adventures-superman-jon-kent-005", seriesId: "series-adventures-superman-jon-kent", title: "As Aventuras do Superman – Jon Kent", issue: "5", format: "cbr", fileUrl: "https://www.mediafire.com/file/tqxqqbnkv33efv0/AdvSMJK%25235_%25282023%2529%2528ZF-SQ%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "adventures-superman-jon-kent-006", seriesId: "series-adventures-superman-jon-kent", title: "As Aventuras do Superman – Jon Kent", issue: "6", format: "cbr", fileUrl: "https://www.mediafire.com/file/rgby1k1h43jlimt/AdvSMJK%25236_%25282023%2529%2528ZF-SQ%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "birds-of-prey-2023-001", seriesId: "series-birds-of-prey-2023", title: "Aves de Rapina", issue: "1", format: "cbr", fileUrl: "https://www.mediafire.com/file/5wx9gl445qa5rr2/Aves_de_Rapina_001_%25282023%2529_%2528SQ_%2526_ZF%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "fury-of-firestorm-2026-001", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "1", format: "cbr", fileUrl: "https://www.mediafire.com/file/gtd5s53thh9oqvf/A+F%C3%BAria+do+Nuclear+%2301+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "fury-of-firestorm-2026-002", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "2", format: "cbr", fileUrl: "https://www.mediafire.com/file/x0b1vr8l7duit9i/A+F%C3%BAria+do+Nuclear+%2302+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "fury-of-firestorm-2026-003", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "3", format: "cbr", fileUrl: "https://www.mediafire.com/file/j7osac1eaizr7cv/A+F%C3%BAria+do+Nuclear+%2303+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "fury-of-firestorm-2026-004", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "4", format: "cbr", fileUrl: "https://www.mediafire.com/file/htnfmlzv392x6h6/A+F%C3%BAria+do+Nuclear+%2304+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "fury-of-firestorm-2026-005", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "5", format: "cbr", fileUrl: "https://www.mediafire.com/file/cq5eyd3n7thbx4f/A+F%C3%BAria+do+Nuclear+%2305+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   {
     id: "manga-001",
     title: "Tomoki-kun wa Onnanoko",
