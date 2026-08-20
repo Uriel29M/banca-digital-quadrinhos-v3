@@ -722,7 +722,11 @@
   }
 
   async function loadCommentThread(item) {
-    const result = await sb.from("comments").select("id, parent_id, body, created_at, profiles(username, avatar_url, title, plan)").eq("item_id", item.id).order("created_at", { ascending: false });
+    let result = await sb.from("comments").select("id, parent_id, body, created_at, profiles(username, avatar_url, title, plan)").eq("item_id", item.id).order("created_at", { ascending: false });
+    if (result.error && /parent_id|schema cache|column/i.test(result.error.message || "")) {
+      const legacyResult = await sb.from("comments").select("id, body, created_at, profiles(username, avatar_url, title, plan)").eq("item_id", item.id).order("created_at", { ascending: false });
+      result = { ...legacyResult, data: (legacyResult.data || []).map(comment => ({ ...comment, parent_id: null })) };
+    }
     if (result.error) return { error: result.error };
     const comments = result.data || [];
     const likes = comments.length ? await sb.from("comment_likes").select("comment_id, user_id").in("comment_id", comments.map(comment => comment.id)) : { data: [] };
