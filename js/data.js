@@ -226,6 +226,26 @@ window.DEFAULT_SERIES.push({
 });
 
 window.DEFAULT_SERIES.push({
+  id: "series-jurassic-league-2022",
+  name: "A Liga Jurássica",
+  seriesTitle: "A Liga Jurássica",
+  originalTitle: "Jurassic League",
+  type: "comic",
+  publisher: "DC Comics",
+  imprint: "",
+  publication: "Minissérie",
+  status: "Cancelada/Terminada",
+  editions: "06",
+  year: 2022,
+  description: "Você conhece a história: uma criança escapa da destruição do seu planeta natal e vai parar na Terra para ser criado por pais humanos. Uma deusa de uma cidade perdida defende a verdade. Um Tiranossauro Rex veste algo parecido com um morcego para infligir medo aos malfeitores. Essa heroica trindade, junto com uma liga de outros dinossauros superpoderosos, juntam forças para salvar uma Terra pré-histórica das sinistras maquinações de Darkseid… o que? Certo, talvez você não conheça a história. Então junte-se a gente e presencie uma aventura novíssima e ainda assim mais velha que o tempo e experiencie a Liga da Justiça como você nunca os viu antes!",
+  coverUrl: "",
+  telegramUrl: "",
+  author: "Daniel Warren Johnson / Juan Gedeon",
+  character: "Liga da Justiça",
+  tags: ["Liga da Justiça", "Jurassic League", "dinossauros", "Darkseid", "Elseworlds", "super-herói", "DC Comics"]
+});
+
+window.DEFAULT_SERIES.push({
   id: "series-unstoppable-doom-patrol-2023",
   name: "A Imparável Patrulha do Destino",
   seriesTitle: "A Imparável Patrulha do Destino",
@@ -489,6 +509,12 @@ window.DEFAULT_LIBRARY = [
   { id: "adventures-superman-jon-kent-005", seriesId: "series-adventures-superman-jon-kent", title: "As Aventuras do Superman – Jon Kent", issue: "5", format: "cbr", fileUrl: "https://www.mediafire.com/file/tqxqqbnkv33efv0/AdvSMJK%25235_%25282023%2529%2528ZF-SQ%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "adventures-superman-jon-kent-006", seriesId: "series-adventures-superman-jon-kent", title: "As Aventuras do Superman – Jon Kent", issue: "6", format: "cbr", fileUrl: "https://www.mediafire.com/file/rgby1k1h43jlimt/AdvSMJK%25236_%25282023%2529%2528ZF-SQ%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "birds-of-prey-2023-001", seriesId: "series-birds-of-prey-2023", title: "Aves de Rapina", issue: "1", format: "cbr", fileUrl: "https://www.mediafire.com/file/5wx9gl445qa5rr2/Aves_de_Rapina_001_%25282023%2529_%2528SQ_%2526_ZF%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "jurassic-league-2022-001", seriesId: "series-jurassic-league-2022", title: "A Liga Jurássica", issue: "1", format: "cbr", fileUrl: "https://www.mediafire.com/file/0leks3eaemv2rvj/A_Liga_Jur%25C3%25A1ssica_%252301_%25282022%2529_%2528SQ%2526ZF%2529.cbr/file", telegramUrl: "", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "jurassic-league-2022-002", seriesId: "series-jurassic-league-2022", title: "A Liga Jurássica", issue: "2", format: "cbr", fileUrl: "https://www.mediafire.com/file/8p3xpgh3h0mghx6/A_Liga_Jur%25C3%25A1ssica_%252302_%25282022%2529_%2528SQ%2526ZF%2529.cbr/file", telegramUrl: "", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "jurassic-league-2022-003", seriesId: "series-jurassic-league-2022", title: "A Liga Jurássica", issue: "3", format: "cbr", fileUrl: "https://www.mediafire.com/file/bjwp2iib4kxifzw/A_Liga_Jur%25C3%25A1ssica_%252303_%25282022%2529_%2528SQ%2526ZF%2529.cbr/file", telegramUrl: "", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "jurassic-league-2022-004", seriesId: "series-jurassic-league-2022", title: "A Liga Jurássica", issue: "4", format: "cbr", fileUrl: "https://www.mediafire.com/file/0bi55zmk06m6b0j/A_Liga_Jur%25C3%25A1ssica_%252304_%25282022%2529_%2528SQ%2526ZF%2529.cbr/file", telegramUrl: "", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "jurassic-league-2022-005", seriesId: "series-jurassic-league-2022", title: "A Liga Jurássica", issue: "5", format: "cbr", fileUrl: "https://www.mediafire.com/file/d0dn8gnu0ve11ob/A_Liga_Jur%25C3%25A1ssica_%252305_%25282022%2529_%2528SQ%2526ZF%2529.cbr/file", telegramUrl: "", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "jurassic-league-2022-006", seriesId: "series-jurassic-league-2022", title: "A Liga Jurássica", issue: "6", format: "cbr", fileUrl: "https://www.mediafire.com/file/gw0wsb0j59q4t3l/A_Liga_Jur%25C3%25A1ssica_%252306_%25282022%2529_%2528SQ%2526ZF%2529.cbr/file", telegramUrl: "", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "unstoppable-doom-patrol-2023-001", seriesId: "series-unstoppable-doom-patrol-2023", title: "A Imparável Patrulha do Destino", issue: "1", format: "cbr", fileUrl: "https://www.mediafire.com/file/b1ruyziki50qvrc/PtrlhDstn%25231_%25282023%2529_%2528ZF-SQ%2529.cbr/file", telegramUrl: "", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "fury-of-firestorm-2026-001", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "1", format: "cbr", fileUrl: "https://www.mediafire.com/file/gtd5s53thh9oqvf/A+F%C3%BAria+do+Nuclear+%2301+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "fury-of-firestorm-2026-002", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "2", format: "cbr", fileUrl: "https://www.mediafire.com/file/x0b1vr8l7duit9i/A+F%C3%BAria+do+Nuclear+%2302+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
@@ -545,4 +571,3 @@ window.DEFAULT_COLLECTIONS = [
     issueIds: ["hq-001", "hq-002", "hq-003"]
   }
 ];
-

@@ -144,6 +144,8 @@
     homeHeroId: null,
     homeRandomIds: [],
     achievements: [],
+    followerCount: 0,
+    followingCount: 0,
     localBoxFiles: [],
     localBoxVisible: false,
     publisherSettings: new Map(),
@@ -342,6 +344,10 @@
     if (session?.user) {
       const profile = await sb.from("profiles").select("*").eq("id", session.user.id).single();
       state.profile = profile.data;
+      const ownFollowers = await sb.from("profile_follows").select("follower_id").eq("following_id", session.user.id);
+      const ownFollowing = await sb.from("profile_follows").select("following_id").eq("follower_id", session.user.id);
+      state.followerCount = (ownFollowers.data || []).length;
+      state.followingCount = (ownFollowing.data || []).length;
       if (state.profile?.is_banned && !["moderator", "admin"].includes(state.profile.plan)) {
         await sb.auth.signOut();
         state.session = null;
@@ -2988,6 +2994,29 @@
     return unique ? uniqueCatalogItems(items) : items;
   }
 
+  function followSummary(profileId, followerCount, followingCount) {
+    return `<div class="profile-follow-summary"><button class="profile-follow-link" data-follow-list="followers" data-follow-profile-id="${escapeHTML(profileId)}">${followerCount || 0} seguidores</button><span> · </span><button class="profile-follow-link" data-follow-list="following" data-follow-profile-id="${escapeHTML(profileId)}">${followingCount || 0} seguindo</button></div>`;
+  }
+
+  async function openFollowList(kind, profileId) {
+    if (!sb || !profileId) return toast("A lista de seguidores ainda não está disponível.");
+    const isFollowers = kind === "followers";
+    const relation = isFollowers
+      ? await sb.from("profile_follows").select("follower_id").eq("following_id", profileId)
+      : await sb.from("profile_follows").select("following_id").eq("follower_id", profileId);
+    if (relation.error) return toast("Não foi possível carregar essa lista.");
+    const ids = (relation.data || []).map(row => isFollowers ? row.follower_id : row.following_id).filter(Boolean);
+    const profiles = ids.length ? await sb.from("profiles").select("id, username, avatar_url, title").in("id", ids) : { data: [] };
+    if (profiles.error) return toast("Não foi possível carregar os perfis.");
+    const byId = new Map((profiles.data || []).map(profile => [profile.id, profile]));
+    const title = isFollowers ? "Seguidores" : "Seguindo";
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal follow-list-modal"><div class="section-head"><div><h2>${title}</h2><div class="section-subtitle">${ids.length} perfil(is)</div></div><button class="small-btn" data-close>Fechar</button></div><div class="follow-list">${ids.map(id => { const profile = byId.get(id); return profile ? `<a class="follow-list-item" href="${escapeHTML(publicProfileHref(profile.username))}"><img src="${escapeHTML(profile.avatar_url || "https://i.pinimg.com/736x/be/17/10/be1710edaace144c17bdaf6deb2d2cc8.jpg")}" alt=""><span><b>@${escapeHTML(profile.username)}</b>${profile.title ? `<small>${escapeHTML(profile.title)}</small>` : ""}</span></a>` : ""; }).join("") || '<div class="empty">Nenhum perfil nesta lista.</div>'}</div></div>`;
+    $("#modal-root").appendChild(overlay);
+    $("[data-close]", overlay).onclick = () => overlay.remove();
+  }
+
   async function saveShelfCategories(categories) {
     if (sb && state.session) {
       const rows = categories.map(category => ({ id: category.id, owner_id: state.session.user.id, name: category.name, cover_url: category.coverUrl || null, is_public: category.isPublic !== false, item_ids: category.itemIds || [] }));
@@ -3166,6 +3195,7 @@
     if (result.error) return toast("Não foi possível atualizar o acompanhamento.");
     publicState.isFollowing = !following;
     publicState.followerCount = Math.max(0, (publicState.followerCount || 0) + (following ? -1 : 1));
+    state.followingCount = Math.max(0, (state.followingCount || 0) + (following ? -1 : 1));
     render();
   }
 
@@ -3361,6 +3391,14 @@
 
   function bind() {
     syncActiveNav();
+    if (state.section === "shelf" && state.session) {
+      const eyebrow = $(".profile-header .eyebrow");
+      if (eyebrow && !$(".profile-follow-summary", eyebrow.parentElement)) eyebrow.insertAdjacentHTML("afterend", followSummary(state.session.user.id, state.followerCount, state.followingCount));
+    }
+    if (state.section === "public-profile" && state.publicProfile?.profile && !state.publicProfile.collectionId) {
+      const publicSummary = $(".public-profile-page > .section-head .section-subtitle");
+      if (publicSummary) publicSummary.innerHTML = followSummary(state.publicProfile.profile.id, state.publicProfile.followerCount, state.publicProfile.followingCount);
+    }
     if (state.section === "entity" && state.entityFilter?.kind === "publisher" && !$("[data-publisher-filter-form]")) {
       const filter = state.collectionFilter || { field: "all", query: "" };
       const form = document.createElement("form");
@@ -3387,6 +3425,7 @@
     $$('[data-like-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleComicLike(el.dataset.likeItem); }));
     $$('[data-share-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); shareComic(el.dataset.shareItem); }));
     $$('[data-publisher]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openEntityPage("publisher", el.dataset.publisher); }));
+    $$('[data-follow-list]').forEach(el => el.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); openFollowList(el.dataset.followList, el.dataset.followProfileId); }));
     $$('[data-public-collection]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); loadPublicProfile(el.dataset.publicOwner, el.dataset.publicCollection); }));
     $$('[data-publisher-settings]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openPublisherSettings(el.dataset.publisherSettings); }));
     $$('[data-publisher-series-toggle]').forEach(el => el.addEventListener("click", event => {
