@@ -639,6 +639,162 @@
     });
   }
 
+  async function openCommentsPopup(item) {
+    if (!sb || !item?.id) return toast("Os comentários ainda não estão disponíveis.");
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop comments-modal-backdrop";
+    overlay.innerHTML = `<div class="modal comments-modal"><div class="section-head"><div><h2>Comentários</h2><div class="section-subtitle">${escapeHTML(item.title || "Quadrinho")}</div></div><button class="small-btn" data-close>Fechar</button></div><div class="comments-list"><span class="section-subtitle">Carregando...</span></div>${state.session ? '<form class="comment-form"><textarea name="body" maxlength="1000" required placeholder="Escreva um comentário..."></textarea><button class="small-btn" type="submit">Comentar</button></form>' : '<p class="section-subtitle">Entre para comentar.</p>'}</div>`;
+    $("#modal-root").appendChild(overlay);
+    $("[data-close]", overlay).onclick = () => overlay.remove();
+    const list = $(".comments-list", overlay);
+    const refresh = async () => {
+      const result = await sb.from("comments").select("id, body, created_at, profiles(username, avatar_url, title, plan)").eq("item_id", item.id).order("created_at", { ascending: false });
+      if (result.error) { list.innerHTML = '<span class="section-subtitle">Não foi possível carregar os comentários.</span>'; return; }
+      list.innerHTML = (result.data || []).map(comment => {
+        const username = cleanUsername(comment.profiles?.username || "usuário");
+        const profile = { ...(comment.profiles || {}), username };
+        return `<article class="comment"><div class="comment-author-row">${avatarMarkup(profile, "comment-avatar")}<div class="comment-author-info"><a class="comment-author" href="${publicProfileHref(username)}" target="_blank" rel="noopener">@${escapeHTML(username)}</a>${profile.title ? `<span class="comment-title">${escapeHTML(profile.title)}</span>` : ""}</div></div><p>${escapeHTML(comment.body)}</p></article>`;
+      }).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
+    };
+    await refresh();
+    $(".comment-form", overlay)?.addEventListener("submit", async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const body = String(new FormData(form).get("body") || "").trim();
+      if (!state.session?.user?.id || !body) return;
+      const button = $("button", form); button.disabled = true;
+      const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
+      if (result.error) toast(result.error.message); else { form.reset(); await refresh(); }
+      button.disabled = false;
+    });
+  }
+
+  async function attachComments(item, overlay) {
+    if (!sb) return;
+    const panel = document.createElement("details");
+    panel.className = "reader-comments";
+    panel.innerHTML = `<summary>Comentários</summary><div class="comments-content"><div class="comments-list"><span class="section-subtitle">Carregando...</span></div>${state.session ? '<form class="comment-form"><textarea name="body" maxlength="1000" required placeholder="Escreva um comentário..."></textarea><button class="small-btn" type="submit">Comentar</button></form>' : '<p class="section-subtitle">Entre para comentar.</p>'}</div>`;
+    overlay.appendChild(panel);
+    const list = $(".comments-list", panel);
+    const refresh = async () => renderCommentThread(list, await loadCommentThread(item));
+    bindCommentThread(panel, item, list, refresh);
+    await refresh();
+    $(".comment-form", panel)?.addEventListener("submit", async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      if (!state.session?.user?.id) return openAuthPage();
+      const body = String(new FormData(form).get("body") || "").trim();
+      if (!body) return;
+      const button = $("button", form); button.disabled = true;
+      const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
+      if (result.error) toast(result.error.message); else { awardAchievement("first_comment"); form.reset(); await refresh(); }
+      button.disabled = false;
+    });
+  }
+
+  async function openCommentsPopup(item) {
+    if (!sb || !item?.id) return toast("Os comentários ainda não estão disponíveis.");
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop comments-modal-backdrop";
+    overlay.innerHTML = `<div class="modal comments-modal"><div class="section-head"><div><h2>Comentários</h2><div class="section-subtitle">${escapeHTML(item.title || "Quadrinho")}</div></div><button class="small-btn" data-close>Fechar</button></div><div class="comments-list"><span class="section-subtitle">Carregando...</span></div>${state.session ? '<form class="comment-form"><textarea name="body" maxlength="1000" required placeholder="Escreva um comentário..."></textarea><button class="small-btn" type="submit">Comentar</button></form>' : '<p class="section-subtitle">Entre para comentar.</p>'}</div>`;
+    $("#modal-root").appendChild(overlay);
+    $("[data-close]", overlay).onclick = () => overlay.remove();
+    const list = $(".comments-list", overlay);
+    const refresh = async () => renderCommentThread(list, await loadCommentThread(item));
+    bindCommentThread(overlay, item, list, refresh);
+    await refresh();
+    $(".comment-form", overlay)?.addEventListener("submit", async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      if (!state.session?.user?.id) return openAuthPage();
+      const body = String(new FormData(form).get("body") || "").trim();
+      if (!body) return;
+      const button = $("button", form); button.disabled = true;
+      const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
+      if (result.error) toast(result.error.message); else { awardAchievement("first_comment"); form.reset(); await refresh(); }
+      button.disabled = false;
+    });
+  }
+
+  function formatCommentDate(value) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(date);
+  }
+
+  async function loadCommentThread(item) {
+    const result = await sb.from("comments").select("id, parent_id, body, created_at, profiles(username, avatar_url, title, plan)").eq("item_id", item.id).order("created_at", { ascending: false });
+    if (result.error) return { error: result.error };
+    const comments = result.data || [];
+    const likes = comments.length ? await sb.from("comment_likes").select("comment_id, user_id").in("comment_id", comments.map(comment => comment.id)) : { data: [] };
+    const likedIds = new Set((likes.data || []).filter(row => row.user_id === state.session?.user?.id).map(row => row.comment_id));
+    const counts = (likes.data || []).reduce((map, row) => map.set(row.comment_id, (map.get(row.comment_id) || 0) + 1), new Map());
+    return { comments, likedIds, counts };
+  }
+
+  function commentMarkup(comment, childrenByParent, likedIds, likeCounts) {
+    const username = cleanUsername(comment.profiles?.username || "usuário");
+    const profile = { ...(comment.profiles || {}), username };
+    const children = childrenByParent.get(comment.id) || [];
+    const replies = children.map(child => commentMarkup(child, childrenByParent, likedIds, likeCounts)).join("");
+    return `<article class="comment" data-comment-id="${comment.id}"><div class="comment-author-row">${avatarMarkup(profile, "comment-avatar")}<div class="comment-author-info"><a class="comment-author" href="${publicProfileHref(username)}" target="_blank" rel="noopener">@${escapeHTML(username)}</a>${profile.title ? `<span class="comment-title">${escapeHTML(profile.title)}</span>` : ""}</div></div><p>${escapeHTML(comment.body)}</p><div class="comment-actions"><button class="comment-action ${likedIds.has(comment.id) ? "is-liked" : ""}" data-comment-like="${comment.id}">♥ ${likeCounts.get(comment.id) || 0}</button><button class="comment-action" data-comment-reply="${comment.id}">Responder</button>${children.length ? `<button class="comment-action" data-comment-toggle="${comment.id}">Ver ${children.length} resposta${children.length === 1 ? "" : "s"}</button>` : ""}<time class="comment-date" datetime="${escapeHTML(comment.created_at)}">${escapeHTML(formatCommentDate(comment.created_at))}</time></div><div class="comment-replies" data-comment-replies="${comment.id}" hidden>${replies}</div></article>`;
+  }
+
+  function renderCommentThread(list, thread) {
+    if (thread.error) {
+      list.innerHTML = '<span class="section-subtitle">Não foi possível carregar os comentários.</span>';
+      return;
+    }
+    const childrenByParent = new Map();
+    thread.comments.forEach(comment => {
+      if (!childrenByParent.has(comment.parent_id)) childrenByParent.set(comment.parent_id, []);
+      childrenByParent.get(comment.parent_id).push(comment);
+    });
+    list.innerHTML = (childrenByParent.get(null) || []).map(comment => commentMarkup(comment, childrenByParent, thread.likedIds, thread.counts)).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
+  }
+
+  function bindCommentThread(root, item, list, refresh) {
+    root.addEventListener("click", async event => {
+      const likeButton = event.target.closest("[data-comment-like]");
+      if (likeButton) {
+        event.preventDefault();
+        if (!state.session) return openAuthPage();
+        const commentId = Number(likeButton.dataset.commentLike);
+        const liked = likeButton.classList.contains("is-liked");
+        const result = liked
+          ? await sb.from("comment_likes").delete().eq("user_id", state.session.user.id).eq("comment_id", commentId)
+          : await sb.from("comment_likes").insert({ user_id: state.session.user.id, comment_id: commentId });
+        if (result.error) return toast("Não foi possível atualizar a curtida.");
+        await refresh();
+        return;
+      }
+      const toggle = event.target.closest("[data-comment-toggle]");
+      if (toggle) {
+        const replies = $(`[data-comment-replies="${toggle.dataset.commentToggle}"]`, root);
+        if (replies) { replies.hidden = !replies.hidden; toggle.textContent = replies.hidden ? `Ver respostas` : "Ocultar respostas"; }
+        return;
+      }
+      const reply = event.target.closest("[data-comment-reply]");
+      if (reply) {
+        const comment = $(`[data-comment-id="${reply.dataset.commentReply}"]`, root);
+        if (!comment || $("[data-reply-form]", comment)) return;
+        comment.insertAdjacentHTML("beforeend", state.session ? '<form class="comment-form comment-reply-form" data-reply-form><textarea name="body" maxlength="1000" required placeholder="Escreva uma resposta..."></textarea><button class="small-btn" type="submit">Responder</button></form>' : '<p class="section-subtitle">Entre para responder.</p>');
+      }
+    });
+    root.addEventListener("submit", async event => {
+      const form = event.target.closest("[data-reply-form]");
+      if (!form) return;
+      event.preventDefault();
+      if (!state.session?.user?.id) return openAuthPage();
+      const body = String(new FormData(form).get("body") || "").trim();
+      if (!body) return;
+      const parentId = Number(form.closest("[data-comment-id]")?.dataset.commentId);
+      const button = $("button", form); button.disabled = true;
+      const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, parent_id: parentId, body });
+      if (result.error) toast(result.error.message); else { form.remove(); await refresh(); }
+      button.disabled = false;
+    });
+  }
+
   function openProfileSettings() {
     if (!state.session) return openAuthPage();
     const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
@@ -736,6 +892,7 @@
         ${item.character ? `<button class="small-btn" data-browse-character>Ver personagem</button>` : ''}
         ${item.publisher ? `<button class="small-btn" data-browse-publisher>Ver editora</button>` : ''}
         ${!item.local ? `<button class="small-btn reader-like-button ${state.comicLikeIds.has(item.id) ? "is-liked" : ""}" data-like-item="${escapeHTML(item.id)}">${state.comicLikeIds.has(item.id) ? "♥" : "♡"} ${state.comicLikeCounts.get(item.id) || 0}</button><button class="small-btn" data-share-item="${escapeHTML(item.id)}">Compartilhar</button>` : ""}
+        ${!item.local ? `<button class="small-btn" data-comment-item="${escapeHTML(item.id)}">Comentários</button>` : ""}
         <button class="small-btn" data-open-external>Abrir arquivo</button>
       </div>
       <div class="reader-body" id="reader-body"></div>
@@ -756,6 +913,7 @@
     };
     $("[data-like-item]", overlay)?.addEventListener("click", event => { event.stopPropagation(); toggleComicLike(item.id); });
     $("[data-share-item]", overlay)?.addEventListener("click", event => { event.stopPropagation(); shareComic(item.id); });
+    $("[data-comment-item]", overlay)?.addEventListener("click", event => { event.stopPropagation(); openCommentsPopup(item); });
     $("[data-open-external]", overlay).onclick = () => window.open(resolvedUrl, "_blank", "noopener");
     $("[data-toggle-cover]", overlay)?.addEventListener("click", () => {
       overlay.remove();
@@ -881,7 +1039,7 @@
   async function renderPDFReader(item, url, body, controls, overlay, skipCover = false, resumePage = 1, onPageChange = () => {}) {
     body.innerHTML = `<div class="empty" style="margin:auto">Carregando PDF…</div>`;
     try {
-      const pdfjs = window.pdfjsLib;
+      const pdfjs = await (window.pdfjsReady || Promise.resolve(window.pdfjsLib));
       // PDF.js 4.x via module pode não expor global em alguns navegadores.
       if (!pdfjs?.getDocument) {
         throw Object.assign(new Error("PDF.js nÃ£o estÃ¡ disponÃ­vel nesta pÃ¡gina."), { name: "PDFJS_MISSING" });
@@ -2311,7 +2469,7 @@
           <div class="card-title">${escapeHTML(item.seriesTitle || item.title)}</div>
           <div class="card-meta">${formatType(item.type)} · ${escapeHTML(String(item.year || ""))}</div>
           <div class="card-stats">♥ ${Number(item.clicks || 0).toLocaleString("pt-BR")} leituras</div>
-          <div class="card-actions"><button class="card-like ${state.comicLikeIds.has(item.id) ? "is-liked" : ""}" data-like-item="${escapeHTML(item.id)}" title="Curtir quadrinho">${state.comicLikeIds.has(item.id) ? "♥" : "♡"} ${state.comicLikeCounts.get(item.id) || 0}</button><button class="card-share" data-share-item="${escapeHTML(item.id)}" title="Compartilhar quadrinho">Compartilhar</button></div>
+          <div class="card-actions"><button class="card-like ${state.comicLikeIds.has(item.id) ? "is-liked" : ""}" data-like-item="${escapeHTML(item.id)}" title="Curtir quadrinho">${state.comicLikeIds.has(item.id) ? "♥" : "♡"} ${state.comicLikeCounts.get(item.id) || 0}</button><button class="card-share" data-share-item="${escapeHTML(item.id)}" title="Compartilhar quadrinho">Compartilhar</button><button class="card-comment" data-comment-item="${escapeHTML(item.id)}" title="Ver comentários">Comentários</button></div>
         </div>
       </article>`;
   }
@@ -2708,6 +2866,11 @@
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
     $$('[data-like-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleComicLike(el.dataset.likeItem); }));
     $$('[data-share-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); shareComic(el.dataset.shareItem); }));
+    $$('[data-comment-item]').forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      const item = state.db.library.find(entry => entry.id === el.dataset.commentItem);
+      if (item) openCommentsPopup(item);
+    }));
     $$('[data-shelf-expand]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); state.shelfExpanded[el.dataset.shelfExpand] = !state.shelfExpanded[el.dataset.shelfExpand]; render(); }));
     $('[data-shelf-new-category]')?.addEventListener("click", () => openShelfCategoryForm());
     $$('[data-shelf-edit-category]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openShelfCategoryForm(el.dataset.shelfEditCategory); }));

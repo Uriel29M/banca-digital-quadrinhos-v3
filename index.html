@@ -51,13 +51,27 @@
   <div id="toast-root" class="toast-root"></div>
 
   <!-- PDF.js -->
+  <script>
+    window.pdfjsReady = new Promise((resolve, reject) => {
+      window.resolvePdfjs = resolve;
+      window.rejectPdfjs = reject;
+    });
+  </script>
   <script type="module">
     // Carrega PDF.js localmente e configura o worker.
     // Certifique-se de que os arquivos pdf.min.mjs e pdf.worker.min.mjs
     // estão na pasta /js/pdfjs/ do seu projeto.
-    import * as pdfjsLib from "./js/pdfjs/pdf.min.mjs";
-    window.pdfjsLib = pdfjsLib;
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `./js/pdfjs/pdf.worker.min.mjs`;
+    import("./js/pdfjs/pdf.min.mjs").then(pdfjsLib => {
+      const library = pdfjsLib;
+      window.pdfjsLib = library;
+      library.GlobalWorkerOptions.workerSrc = "./js/pdfjs/pdf.worker.min.mjs";
+      window.resolvePdfjs(library);
+      return library;
+    }).catch(error => {
+      console.error("Não foi possível carregar o PDF.js.", error);
+      window.rejectPdfjs(error);
+      throw error;
+    });
   </script>
   <!-- JSZip para CBZ -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
