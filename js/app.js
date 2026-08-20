@@ -376,9 +376,9 @@
   }
 
   async function loadNotifications() {
-    state.notificationChannel?.unsubscribe?.();
-    state.notificationChannel = null;
     if (!sb || !state.session?.user?.id) {
+      state.notificationChannel?.unsubscribe?.();
+      state.notificationChannel = null;
       state.notifications = [];
       state.notificationUnreadCount = 0;
       return;
@@ -398,13 +398,15 @@
       .map(notification => ({ ...notification, actor: actors.get(notification.actor_id) || null }))
       .filter(notification => !isNotificationFromOpenChat(notification));
     state.notificationUnreadCount = state.notifications.filter(notification => !notification.read_at).length;
-    state.notificationChannel = sb.channel("notifications-" + state.session.user.id).on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: "user_id=eq." + state.session.user.id }, async payload => {
-      if (isNotificationFromOpenChat(payload?.new || {})) {
-        await markChatNotificationsRead(payload.new.actor_id);
-      }
-      await loadNotifications();
-      render();
-    }).subscribe();
+    if (!state.notificationChannel) {
+      state.notificationChannel = sb.channel("notifications-" + state.session.user.id).on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: "user_id=eq." + state.session.user.id }, async payload => {
+        if (isNotificationFromOpenChat(payload?.new || {})) {
+          await markChatNotificationsRead(payload.new.actor_id);
+        }
+        await loadNotifications();
+        render();
+      }).subscribe();
+    }
   }
 
   function isNotificationFromOpenChat(notification) {
@@ -3170,14 +3172,15 @@
     channel = sb.channel(`chat-room-${room.id}-${state.session.user.id}`).on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: `room_id=eq.${room.id}` }, payload => { if (payload.new?.room_id === room.id) renderMessages(); }).subscribe();
     $("#chat-room-compose", overlay).onsubmit = async event => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const composeForm = event.currentTarget;
+      const form = new FormData(composeForm);
       const body = String(form.get("body") || "").trim();
-      const button = $("button[type=submit]", event.currentTarget);
+      const button = $("button[type=submit]", composeForm);
       if (!body || button.disabled) return;
       button.disabled = true;
       const result = await sb.from("chat_messages").insert({ sender_id: state.session.user.id, room_id: room.id, recipient_id: null, body, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
       if (result.error) toast(result.error.message || "Não foi possível enviar a mensagem.");
-      else { event.currentTarget.reset(); await renderMessages(); }
+      else { composeForm.reset(); await renderMessages(); }
       button.disabled = false;
     };
   }
@@ -3239,6 +3242,7 @@
     channel = sb.channel(`chat-${state.session.user.id}-${contact.id}`).on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: `recipient_id=eq.${state.session.user.id}` }, payload => { if (payload.new?.sender_id === contact.id) renderMessages(); }).subscribe();
     $("#chat-compose", overlay).onsubmit = async event => {
       event.preventDefault();
+      const composeForm = event.currentTarget;
       const form = new FormData(event.currentTarget);
       const body = String(form.get("body") || "").trim();
       if (!body) return;
