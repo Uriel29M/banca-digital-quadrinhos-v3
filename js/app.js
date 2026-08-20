@@ -146,6 +146,7 @@
     achievements: [],
     followerCount: 0,
     followingCount: 0,
+    chatContact: null,
     localBoxFiles: [],
     localBoxVisible: false,
     publisherSettings: new Map(),
@@ -3017,6 +3018,50 @@
     $("[data-close]", overlay).onclick = () => overlay.remove();
   }
 
+  async function openChat(contact = null) {
+    if (!state.session || !sb) return openAuthPage();
+    if (contact?.id === state.session.user.id) return toast("Você não pode enviar mensagens para si mesmo.");
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal chat-modal"><div class="section-head"><div><h2>Mensagens</h2><div class="section-subtitle">As mensagens desaparecem após 24 horas.</div></div><button class="small-btn" data-close>Fechar</button></div><div class="chat-contact-picker">${contact ? `<div class="chat-contact-selected">Conversando com <b>@${escapeHTML(contact.username)}</b></div>` : `<form id="chat-contact-form"><input name="username" required placeholder="Nome de usuário"><button class="small-btn">Abrir conversa</button></form>`}</div>${contact ? `<div class="chat-messages" data-chat-messages><div class="empty">Carregando mensagens...</div></div><form class="chat-compose" id="chat-compose"><textarea name="body" maxlength="2000" rows="2" required placeholder="Escreva uma mensagem"></textarea><button class="btn btn-danger">Enviar</button></form>` : `<div class="notice">Abra o perfil de um usuário e clique em “Enviar mensagem”, ou pesquise o nome de usuário acima.</div>`}</div>`;
+    $("#modal-root").appendChild(overlay);
+    const close = () => { channel?.unsubscribe(); overlay.remove(); };
+    $("[data-close]", overlay).onclick = close;
+    let channel = null;
+    if (!contact) {
+      $("#chat-contact-form", overlay).onsubmit = async event => {
+        event.preventDefault();
+        const username = String(new FormData(event.currentTarget).get("username") || "").trim();
+        if (!username) return;
+        const result = await sb.from("profiles").select("id, username, avatar_url, title").ilike("username", username).maybeSingle();
+        if (result.error || !result.data) return toast("Usuário não encontrado.");
+        overlay.remove();
+        openChat(result.data);
+      };
+      return;
+    }
+    const messagesRoot = $("[data-chat-messages]", overlay);
+    const renderMessages = async () => {
+      const now = new Date().toISOString();
+      const result = await sb.from("chat_messages").select("id, sender_id, body, created_at").or(`and(sender_id.eq.${state.session.user.id},recipient_id.eq.${contact.id}),and(sender_id.eq.${contact.id},recipient_id.eq.${state.session.user.id})`).gt("expires_at", now).order("created_at", { ascending: true }).limit(200);
+      if (result.error) return messagesRoot.innerHTML = '<div class="empty">Não foi possível carregar as mensagens.</div>';
+      messagesRoot.innerHTML = (result.data || []).map(message => `<div class="chat-message ${message.sender_id === state.session.user.id ? "is-mine" : ""}"><div>${escapeHTML(message.body)}</div><small>${escapeHTML(formatCommentDate(message.created_at))}</small></div>`).join("") || '<div class="empty">Nenhuma mensagem ainda.</div>';
+      messagesRoot.scrollTop = messagesRoot.scrollHeight;
+    };
+    await renderMessages();
+    channel = sb.channel(`chat-${state.session.user.id}-${contact.id}`).on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: `recipient_id=eq.${state.session.user.id}` }, payload => { if (payload.new?.sender_id === contact.id) renderMessages(); }).subscribe();
+    $("#chat-compose", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const body = String(form.get("body") || "").trim();
+      if (!body) return;
+      const result = await sb.from("chat_messages").insert({ sender_id: state.session.user.id, recipient_id: contact.id, body, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
+      if (result.error) return toast("Não foi possível enviar a mensagem.");
+      event.currentTarget.reset();
+      await renderMessages();
+    };
+  }
+
   async function saveShelfCategories(categories) {
     if (sb && state.session) {
       const rows = categories.map(category => ({ id: category.id, owner_id: state.session.user.id, name: category.name, cover_url: category.coverUrl || null, is_public: category.isPublic !== false, item_ids: category.itemIds || [] }));
@@ -3420,12 +3465,18 @@
     }
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
     $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
+    $$('.messages-nav').forEach(button => { button.style.display = state.session ? "" : "none"; });
     $$('.local-box-nav').forEach(button => { button.style.display = state.session && state.localBoxVisible ? "" : "none"; });
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
     $$('[data-like-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleComicLike(el.dataset.likeItem); }));
     $$('[data-share-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); shareComic(el.dataset.shareItem); }));
     $$('[data-publisher]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openEntityPage("publisher", el.dataset.publisher); }));
     $$('[data-follow-list]').forEach(el => el.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); openFollowList(el.dataset.followList, el.dataset.followProfileId); }));
+    if (state.section === "public-profile" && state.publicProfile?.profile && state.session?.user?.id !== state.publicProfile.profile.id && !$("[data-open-chat]")) {
+      const actions = $(".public-profile-page > .section-head .profile-actions");
+      if (actions) { const button = document.createElement("button"); button.className = "small-btn"; button.dataset.openChat = "true"; button.textContent = "Enviar mensagem"; actions.prepend(button); }
+    }
+    $('[data-open-chat]')?.addEventListener("click", () => openChat(state.publicProfile?.profile));
     $$('[data-public-collection]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); loadPublicProfile(el.dataset.publicOwner, el.dataset.publicCollection); }));
     $$('[data-publisher-settings]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openPublisherSettings(el.dataset.publisherSettings); }));
     $$('[data-publisher-series-toggle]').forEach(el => el.addEventListener("click", event => {
@@ -3492,6 +3543,7 @@
       if (a === "do-search") { state.search = $("#search-input")?.value || ""; navigate({ pagina: "pesquisar", q: state.search }); }
       if (a === "open-admin") { if (canManage) openAdmin(); }
       if (a === "open-auth") state.session ? setSection("shelf") : openAuthPage();
+      if (a === "messages") openChat();
       if (a === "logout") signOut();
       if (a === "profile") openProfileSettings();
       if (a === "submit") { if (isAdmin) openSubmission(); else toast("O envio de quadrinhos é exclusivo para administradores."); }
