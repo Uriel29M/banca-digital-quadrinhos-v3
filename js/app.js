@@ -137,7 +137,17 @@
     const result = await sb.functions.invoke("github-catalog", {
       body: { library: state.db.library, collections: state.db.collections },
     });
-    if (result.error) throw new Error(result.error.message || "Não foi possível publicar o catálogo.");
+    if (result.error) {
+      let detail = result.error.message || "Não foi possível publicar o catálogo.";
+      try {
+        const response = result.error.context;
+        if (response?.clone) {
+          const body = await response.clone().json();
+          if (body?.error) detail = body.error;
+        }
+      } catch {}
+      throw new Error(detail);
+    }
     if (result.data?.error) throw new Error(result.data.error);
     return result.data;
   }
@@ -150,7 +160,10 @@
       })
       .catch(error => {
         console.error("[CATALOG] Falha ao publicar no GitHub:", error);
-        toast(`${message} Mas não foi possível atualizar o GitHub.`);
+        const detail = /failed to send a request to the edge function/i.test(error.message || "")
+          ? "a Edge Function github-catalog não respondeu. Implante-a no projeto Supabase."
+          : (error.message || "não foi possível publicar.");
+        toast(`${message} GitHub: ${detail}`);
       });
   }
 
