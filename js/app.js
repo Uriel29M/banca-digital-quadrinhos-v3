@@ -147,7 +147,8 @@
     localBoxFiles: [],
     localBoxVisible: false,
     publisherSettings: new Map(),
-    publisherSeriesExpanded: {}
+    publisherSeriesExpanded: {},
+    popularPublicCollections: []
   };
 
   let activeReaderCleanup = null;
@@ -319,6 +320,22 @@
     state.session = session;
     const publisherSettings = await sb.from("publisher_settings").select("publisher_key, publisher_name, cover_url, is_pinned");
     state.publisherSettings = new Map((publisherSettings.data || []).map(setting => [setting.publisher_key, setting]));
+    const publicCollectionsResult = await sb.from("shelf_collections").select("id, owner_id, name, cover_url, item_ids").eq("is_public", true).limit(50);
+    const publicCollections = publicCollectionsResult.data || [];
+    const collectionOwnerIds = [...new Set(publicCollections.map(collection => collection.owner_id).filter(Boolean))];
+    const collectionOwnersResult = collectionOwnerIds.length ? await sb.from("profiles").select("id, username").in("id", collectionOwnerIds) : { data: [] };
+    const collectionOwners = new Map((collectionOwnersResult.data || []).map(profile => [profile.id, profile.username]));
+    const collectionLikesResult = await sb.from("shelf_collection_likes").select("owner_id, collection_id");
+    const collectionLikeCounts = (collectionLikesResult.data || []).reduce((counts, like) => {
+      const key = `${like.owner_id}:${like.collection_id}`;
+      counts.set(key, (counts.get(key) || 0) + 1);
+      return counts;
+    }, new Map());
+    state.popularPublicCollections = publicCollections
+      .map(collection => ({ ...collection, username: collectionOwners.get(collection.owner_id) || "", likes: collectionLikeCounts.get(`${collection.owner_id}:${collection.id}`) || 0 }))
+      .filter(collection => collection.username)
+      .sort((a, b) => b.likes - a.likes || String(a.name).localeCompare(String(b.name), "pt-BR"))
+      .slice(0, 8);
     const comicLikes = await sb.from("comic_likes").select("item_id, user_id");
     state.comicLikeIds = new Set((comicLikes.data || []).filter(row => row.user_id === session?.user?.id).map(row => row.item_id));
     state.comicLikeCounts = (comicLikes.data || []).reduce((counts, row) => counts.set(row.item_id, (counts.get(row.item_id) || 0) + 1), new Map());
@@ -2848,7 +2865,6 @@
         ${rail("Mais lidos", mostClicked, "As edições que mais receberam cliques.", "Ver catálogo")}
         ${rail("Escolha aleatória", randoms, "Como escolher uma revista numa banca: você nunca sabe o que vai encontrar.", "", true)}
         ${rail("Quadrinhos", comics)}
-        ${renderCollectionsPreview()}
       </div>`;
   }
 
@@ -3371,6 +3387,7 @@
     $$('[data-like-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleComicLike(el.dataset.likeItem); }));
     $$('[data-share-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); shareComic(el.dataset.shareItem); }));
     $$('[data-publisher]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openEntityPage("publisher", el.dataset.publisher); }));
+    $$('[data-public-collection]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); loadPublicProfile(el.dataset.publicOwner, el.dataset.publicCollection); }));
     $$('[data-publisher-settings]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openPublisherSettings(el.dataset.publisherSettings); }));
     $$('[data-publisher-series-toggle]').forEach(el => el.addEventListener("click", event => {
       event.stopPropagation();
@@ -3706,7 +3723,7 @@
     });
     const publisherCarousel = type === "comic" && publishers.size ? `<section class="section publisher-carousel-section"><div class="section-head"><div><h2 class="section-title">Editoras</h2><div class="section-subtitle">Explore os quadrinhos por editora</div></div></div><div class="publisher-carousel">${[...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR")).map(([publisher, publisherItems]) => { const representative = publisherItems.find(item => item.featuredCoverUrl || item.coverUrl || item.cover) || publisherItems[0]; return `<button class="publisher-card" type="button" data-publisher="${escapeHTML(publisher)}"><div class="publisher-card-cover" style="background-image:url('${escapeHTML(coverFor(representative))}')"></div><div class="publisher-card-overlay"></div><div class="publisher-card-info"><strong>${escapeHTML(publisher)}</strong><span>${publisherItems.length} quadrinho(s)</span></div></button>`; }).join("")}</div></section>` : "";
     const catalogHeader = type === "comic" ? "" : `<div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>`;
-    return `<div class="content">${catalogHeader}${publisherCarousel}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
+    return `<div class="content">${catalogHeader}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}${publisherCarousel}</div>`;
   }
 
   function openSubmission() {
@@ -3904,7 +3921,7 @@
     });
     const publisherCarousel = type === "comic" && publishers.size ? `<section class="section publisher-carousel-section"><div class="section-head"><div><h2 class="section-title">Editoras</h2><div class="section-subtitle">Explore os quadrinhos por editora</div></div></div><div class="publisher-carousel">${[...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR")).map(([publisher, publisherItems]) => { const representative = publisherItems.find(item => item.featuredCoverUrl || item.coverUrl || item.cover) || publisherItems[0]; return `<button class="publisher-card" type="button" data-publisher="${escapeHTML(publisher)}"><div class="publisher-card-cover" style="background-image:url('${escapeHTML(coverFor(representative))}')"></div><div class="publisher-card-overlay"></div><div class="publisher-card-info"><strong>${escapeHTML(publisher)}</strong><span>${publisherItems.length} quadrinho(s)</span></div></button>`; }).join("")}</div></section>` : "";
     const catalogHeader = type === "comic" ? "" : `<div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>`;
-    return `<div class="content">${catalogHeader}${publisherCarousel}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
+    return `<div class="content">${catalogHeader}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}${publisherCarousel}</div>`;
   }
 
   function renderCatalog(type = null) {
@@ -3917,10 +3934,13 @@
     const publisherEntries = [...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR"));
     const publisherCard = ([name, publisherItems]) => { const setting = state.publisherSettings.get(publisherKey(name)); const representative = publisherItems.find(item => item.featuredCoverUrl || item.coverUrl || item.cover) || publisherItems[0]; const cover = setting?.cover_url || coverFor(representative); return `<button class="publisher-card ${setting?.is_pinned ? "is-pinned" : ""}" type="button" data-publisher="${escapeHTML(name)}"><div class="publisher-card-cover" style="background-image:url('${escapeHTML(cover)}')"></div><div class="publisher-card-overlay"></div><div class="publisher-card-info"><strong>${escapeHTML(name)}</strong><span>${publisherItems.length} quadrinho(s)</span></div></button>`; };
     const pinned = publisherEntries.filter(([name]) => state.publisherSettings.get(publisherKey(name))?.is_pinned);
-    const publisherCarousel = type === "comic" && publisherEntries.length ? `${pinned.length ? `<section class="section publisher-pinned-section"><div class="section-head"><div><h2 class="section-title">Editoras fixadas</h2><div class="section-subtitle">Acesso rápido às editoras em destaque</div></div></div><div class="publisher-carousel">${pinned.map(publisherCard).join("")}</div></section>` : ""}<section class="section publisher-all-section"><div class="section-head"><div><h2 class="section-title">Editoras</h2><div class="section-subtitle">Explore todos os quadrinhos por editora</div></div></div><div class="publisher-carousel">${publisherEntries.map(publisherCard).join("")}</div></section>` : "";
+    const publisherPinnedCarousel = type === "comic" && pinned.length ? `<section class="section publisher-pinned-section"><div class="section-head"><div><h2 class="section-title">Editoras fixadas</h2><div class="section-subtitle">Acesso rápido às editoras em destaque</div></div></div><div class="publisher-carousel">${pinned.map(publisherCard).join("")}</div></section>` : "";
+    const publisherCarousel = type === "comic" && publisherEntries.length ? `<section class="section publisher-all-section"><div class="section-head"><div><h2 class="section-title">Editoras</h2><div class="section-subtitle">Explore todos os quadrinhos por editora</div></div></div><div class="publisher-carousel">${publisherEntries.map(publisherCard).join("")}</div></section>` : "";
+    const popularCollections = state.popularPublicCollections || [];
+    const popularCollectionsMarkup = type === "comic" && popularCollections.length ? `<section class="section popular-collections-section"><div class="section-head"><div><h2 class="section-title">Coleções públicas mais curtidas</h2><div class="section-subtitle">Descubra listas públicas da comunidade</div></div></div><div class="feature-grid">${popularCollections.map(collection => `<div class="feature-card" data-public-collection="${escapeHTML(collection.id)}" data-public-owner="${escapeHTML(collection.username)}"><div class="cover" style="background-image:url('${escapeHTML(collection.cover_url || "")}')"></div><div class="gradient"></div><div class="feature-info"><h3>${escapeHTML(collection.name)}</h3><p>${collection.likes} curtida(s) · @${escapeHTML(collection.username)}</p></div></div>`).join("")}</div></section>` : "";
     const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
     const catalogHeader = type === "comic" ? "" : `<div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>`;
-    return `<div class="content">${catalogHeader}${publisherCarousel}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
+    return `<div class="content">${catalogHeader}${publisherPinnedCarousel}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}${publisherCarousel}${popularCollectionsMarkup}</div>`;
   }
 
   window.addEventListener("popstate", applyRoute);

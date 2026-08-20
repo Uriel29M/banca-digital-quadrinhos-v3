@@ -226,6 +226,26 @@ window.DEFAULT_SERIES.push({
 });
 
 window.DEFAULT_SERIES.push({
+  id: "series-unstoppable-doom-patrol-2023",
+  name: "A Imparável Patrulha do Destino",
+  seriesTitle: "A Imparável Patrulha do Destino",
+  originalTitle: "Unstoppable Doom Patrol",
+  type: "comic",
+  publisher: "DC Comics",
+  imprint: "2023-",
+  publication: "Série Mensal",
+  status: "Em Andamento",
+  editions: "—",
+  year: 2023,
+  description: "OS HERÓIS MAIS ESTRANHOS DE TODOS ESTÃO DE VOLTA NO UNIVERSO DC! Depois dos eventos de Planeta Lázaro, mais pessoas do que nunca possuem metagenes ativos! A maioria desses novos metahumanos se tornaram párias, ignorados e aprisionados por uma sociedade com medo. Eles estão escondidos no escuro, perdidos em um sistema que os vê apenas como armas ou como ratos de laboratórios – bombas relógios que só podem ser desativadas pela Imparável Patrulha do Destino! Homem-Robô, Mulher-Elástica e Homem Negativo dão as boas-vindas a seus novos colegas de equipe, Garota Fera e Degenerado, e são liderados pela nova e misteriosa identidade de Crazy Jane, a Chefe, em uma missão para salvar o mundo salvando os monstros!",
+  coverUrl: "",
+  telegramUrl: "",
+  author: "Dennis Culver / Chris Burnham",
+  character: "Patrulha do Destino",
+  tags: ["Patrulha do Destino", "Doom Patrol", "metahumanos", "super-herói", "DC Comics"]
+});
+
+window.DEFAULT_SERIES.push({
   id: "series-fury-of-firestorm-2026",
   name: "A Fúria do Nuclear",
   seriesTitle: "A Fúria do Nuclear",
@@ -469,6 +489,7 @@ window.DEFAULT_LIBRARY = [
   { id: "adventures-superman-jon-kent-005", seriesId: "series-adventures-superman-jon-kent", title: "As Aventuras do Superman – Jon Kent", issue: "5", format: "cbr", fileUrl: "https://www.mediafire.com/file/tqxqqbnkv33efv0/AdvSMJK%25235_%25282023%2529%2528ZF-SQ%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "adventures-superman-jon-kent-006", seriesId: "series-adventures-superman-jon-kent", title: "As Aventuras do Superman – Jon Kent", issue: "6", format: "cbr", fileUrl: "https://www.mediafire.com/file/rgby1k1h43jlimt/AdvSMJK%25236_%25282023%2529%2528ZF-SQ%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "birds-of-prey-2023-001", seriesId: "series-birds-of-prey-2023", title: "Aves de Rapina", issue: "1", format: "cbr", fileUrl: "https://www.mediafire.com/file/5wx9gl445qa5rr2/Aves_de_Rapina_001_%25282023%2529_%2528SQ_%2526_ZF%2529.cbr", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
+  { id: "unstoppable-doom-patrol-2023-001", seriesId: "series-unstoppable-doom-patrol-2023", title: "A Imparável Patrulha do Destino", issue: "1", format: "cbr", fileUrl: "https://www.mediafire.com/file/b1ruyziki50qvrc/PtrlhDstn%25231_%25282023%2529_%2528ZF-SQ%2529.cbr/file", telegramUrl: "", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "fury-of-firestorm-2026-001", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "1", format: "cbr", fileUrl: "https://www.mediafire.com/file/gtd5s53thh9oqvf/A+F%C3%BAria+do+Nuclear+%2301+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "fury-of-firestorm-2026-002", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "2", format: "cbr", fileUrl: "https://www.mediafire.com/file/x0b1vr8l7duit9i/A+F%C3%BAria+do+Nuclear+%2302+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "fury-of-firestorm-2026-003", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "3", format: "cbr", fileUrl: "https://www.mediafire.com/file/j7osac1eaizr7cv/A+F%C3%BAria+do+Nuclear+%2303+%282026%29+%28SoQuadrinhos%29.cbr/file", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
@@ -524,3 +545,4 @@ window.DEFAULT_COLLECTIONS = [
     issueIds: ["hq-001", "hq-002", "hq-003"]
   }
 ];
+
