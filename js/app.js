@@ -642,6 +642,7 @@
 
   function openEntityPage(kind, value) {
     state.entityFilter = { kind, value };
+    state.collectionFilter = { field: "all", query: "" };
     navigate({ pagina: "entidade", tipo: kind, valor: value });
   }
 
@@ -2639,7 +2640,9 @@
 
   function renderEntityPage() {
     const filter = state.entityFilter || { kind: "character", value: "" };
-    const items = state.db.library.filter(item => String(item[filter.kind] || "").toLowerCase() === String(filter.value || "").toLowerCase() && (filter.kind !== "publisher" || item.type === "comic"));
+    const allItems = state.db.library.filter(item => String(item[filter.kind] || "").toLowerCase() === String(filter.value || "").toLowerCase() && (filter.kind !== "publisher" || item.type === "comic"));
+    const collectionFilter = state.collectionFilter || { field: "all", query: "" };
+    const items = filter.kind === "publisher" ? filterCollectionItems(allItems, collectionFilter.field, collectionFilter.query) : allItems;
     const title = filter.kind === "publisher" ? "Editora" : "Personagem";
     if (filter.kind !== "publisher") return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) relacionadas a ${title.toLowerCase()}</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div><section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
     const setting = state.publisherSettings.get(publisherKey(filter.value));
@@ -3083,6 +3086,15 @@
 
   function bind() {
     syncActiveNav();
+    if (state.section === "entity" && state.entityFilter?.kind === "publisher" && !$("[data-publisher-filter-form]")) {
+      const filter = state.collectionFilter || { field: "all", query: "" };
+      const form = document.createElement("form");
+      form.className = "collection-filter publisher-filter";
+      form.dataset.collectionFilterForm = "true";
+      form.dataset.publisherFilterForm = "true";
+      form.innerHTML = `<select name="field"><option value="all" ${filter.field === "all" ? "selected" : ""}>Filtrar por qualquer campo</option><option value="author" ${filter.field === "author" ? "selected" : ""}>Autor</option><option value="publisher" ${filter.field === "publisher" ? "selected" : ""}>Editora</option><option value="character" ${filter.field === "character" ? "selected" : ""}>Personagem</option><option value="tag" ${filter.field === "tag" ? "selected" : ""}>Gênero / tag</option><option value="seriesTitle" ${filter.field === "seriesTitle" ? "selected" : ""}>Série</option><option value="title" ${filter.field === "title" ? "selected" : ""}>Título</option></select><input name="query" value="${escapeHTML(filter.query)}" placeholder="Digite para filtrar a editora"><button class="small-btn">Filtrar</button>`;
+      $(".publisher-page .section-head")?.after(form);
+    }
     const canManage = state.profile?.plan === "admin";
     const isAdmin = state.profile?.plan === "admin";
     const headerAvatar = $(".avatar");
