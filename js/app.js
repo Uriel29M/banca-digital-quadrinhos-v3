@@ -5,6 +5,41 @@
   // --- Fim da Inicialização ---
   const DB_KEY = `bancaDigitalDB_v1:${window.CATALOG_VERSION || "local"}`;
   const DEFAULT_AVATAR_URL = "https://i.pinimg.com/736x/be/17/10/be1710edaace144c17bdaf6deb2d2cc8.jpg";
+  const SERIES_FIELDS = ["seriesTitle", "author", "publisher", "imprint", "year", "description", "coverUrl", "telegramUrl", "tags", "type", "publication", "status", "editions", "character"];
+
+  function materializeSeriesItems(items = []) {
+    const series = new Map((window.DEFAULT_SERIES || []).map(entry => [entry.id, entry]));
+    return items.map(item => {
+      const definition = series.get(item.seriesId);
+      if (!definition) return item;
+      const merged = { ...definition, ...item };
+      SERIES_FIELDS.forEach(field => {
+        if (item[field] === undefined || item[field] === null || item[field] === "") merged[field] = definition[field];
+      });
+      if (merged.id === "teen-titans-academy-anuario") {
+        merged.issue = "Anuário";
+        merged.sortOrder = 4.5;
+      }
+      merged.seriesTitle = item.seriesTitle || definition.name || definition.seriesTitle;
+      merged.title = item.title || merged.seriesTitle;
+      return merged;
+    });
+  }
+
+  function compactSeriesItems(items = []) {
+    const series = new Map((window.DEFAULT_SERIES || []).map(entry => [entry.id, entry]));
+    return items.map(item => {
+      const definition = series.get(item.seriesId);
+      if (!definition) return item;
+      const compact = { ...item };
+      SERIES_FIELDS.forEach(field => {
+        if (field !== "type" && compact[field] === definition[field]) delete compact[field];
+      });
+      if (compact.seriesTitle === definition.name || compact.seriesTitle === definition.seriesTitle) delete compact.seriesTitle;
+      if (compact.title === definition.name || compact.title === definition.seriesTitle) delete compact.title;
+      return compact;
+    });
+  }
 
   const DataStore = {
     load() {
@@ -12,9 +47,9 @@
         const saved = JSON.parse(localStorage.getItem(DB_KEY));
         if (saved?.library && saved?.collections) {
           const defaultsById = new Map((window.DEFAULT_LIBRARY || []).map(item => [item.id, item]));
-          saved.library = saved.library.map(item => ({ ...(defaultsById.get(item.id) || {}), ...item }));
+          saved.library = materializeSeriesItems(saved.library.map(item => ({ ...(defaultsById.get(item.id) || {}), ...item })));
           const knownIds = new Set(saved.library.map(item => item.id));
-          const newDefaults = structuredClone(window.DEFAULT_LIBRARY).filter(item => !knownIds.has(item.id));
+          const newDefaults = materializeSeriesItems(structuredClone(window.DEFAULT_LIBRARY)).filter(item => !knownIds.has(item.id));
           if (newDefaults.length) {
             const merged = { ...saved, library: [...saved.library, ...newDefaults] };
             this.save(merged);
@@ -28,11 +63,12 @@
         collections: structuredClone(window.DEFAULT_COLLECTIONS),
         submissions: []
       };
+      fresh.library = materializeSeriesItems(fresh.library);
       this.save(fresh);
       return fresh;
     },
     save(db) {
-      localStorage.setItem(DB_KEY, JSON.stringify(db));
+      localStorage.setItem(DB_KEY, JSON.stringify({ ...db, library: compactSeriesItems(db.library) }));
     }
   };
 
@@ -49,6 +85,7 @@
     readingMode: localStorage.getItem("readingMode") || "single-page", // 'single-page', 'double-page', or 'continuous-scroll'
     readingDirection: localStorage.getItem("readingDirection") || "western" // 'western' or 'eastern'
     ,session: null,
+    authReady: false,
     profile: null,
     favoriteIds: new Set(),
     readingProgress: new Map(),
@@ -59,10 +96,13 @@
     comicLikeIds: new Set(),
     comicLikeCounts: new Map(),
     achievementChecks: new Set(),
+    homeHeroId: null,
+    homeRandomIds: [],
     achievements: [],
     localBoxFiles: [],
     localBoxVisible: false,
-    publisherSettings: new Map()
+    publisherSettings: new Map(),
+    publisherSeriesExpanded: {}
   };
 
   let activeReaderCleanup = null;
@@ -117,7 +157,7 @@
       state.section = "reader";
       state.readerItemId = readerId;
       render();
-      openReader(item, { routeSync: true });
+      if (state.authReady) openReader(item, { routeSync: true });
     } else {
       state.section = section;
       state.collectionId = params.get("colecao") || null;
@@ -135,7 +175,7 @@
   async function publishCatalog() {
     if (!sb || state.profile?.plan !== "admin") return { skipped: true };
     const result = await sb.functions.invoke("github-catalog", {
-      body: { library: state.db.library, collections: state.db.collections },
+      body: { library: compactSeriesItems(state.db.library), series: window.DEFAULT_SERIES || [], collections: state.db.collections },
     });
     if (result.error) {
       let detail = result.error.message || "Não foi possível publicar o catálogo.";
@@ -214,7 +254,11 @@
   }
 
   async function loadAccount() {
-    if (!sb) return;
+    if (!sb) {
+      state.authReady = true;
+      render();
+      return;
+    }
     const { data: { session } } = await sb.auth.getSession();
     state.session = session;
     const publisherSettings = await sb.from("publisher_settings").select("publisher_key, publisher_name, cover_url, is_pinned");
@@ -225,12 +269,6 @@
     if (session?.user) {
       const profile = await sb.from("profiles").select("*").eq("id", session.user.id).single();
       state.profile = profile.data;
-      const currentReader = state.section === "reader" ? state.db.library.find(item => item.id === state.readerItemId) : null;
-      if (currentReader && shouldSkipCover()) {
-        activeReaderCleanup?.();
-        activeReaderCleanup = null;
-        openReader(currentReader, { routeSync: true, skipCover: true });
-      }
       if (state.profile?.is_banned && !["moderator", "admin"].includes(state.profile.plan)) {
         await sb.auth.signOut();
         state.session = null;
@@ -249,6 +287,7 @@
       state.achievements = (achievements.data || []).map(row => row.achievements).filter(Boolean);
       await sb.rpc("touch_profile");
     }
+    state.authReady = true;
     render();
   }
 
@@ -359,7 +398,16 @@
       rememberShelfItem("saved", itemId);
       awardAchievement("first_favorite");
     }
+    updateFavoriteButtons(itemId);
     render();
+  }
+
+  function updateFavoriteButtons(itemId) {
+    const favorite = state.favoriteIds.has(itemId);
+    $$('[data-favorite]').filter(button => button.dataset.favorite === itemId).forEach(button => {
+      button.classList.toggle("is-favorite", favorite);
+      button.textContent = favorite ? "★" : "☆";
+    });
   }
 
   function updateComicLikeButtons(itemId) {
@@ -607,6 +655,13 @@
       .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   }
 
+  function issueSortValue(item) {
+    const explicitOrder = Number(item?.sortOrder);
+    if (Number.isFinite(explicitOrder)) return explicitOrder;
+    const issueNumber = Number(String(item?.issue || "").match(/\d+(?:\.\d+)?/)?.[0]);
+    return Number.isFinite(issueNumber) ? issueNumber : Number.MAX_SAFE_INTEGER;
+  }
+
   function uniqueCatalogItems(items) {
     const seen = new Set();
     return items.filter(item => {
@@ -628,7 +683,7 @@
   function seriesEditions(item) {
     if (!item?.seriesId) return [];
     return state.db.library.filter(x => x.seriesId === item.seriesId)
-      .sort((a, b) => (Number(String(a.issue || "").match(/\d+/)?.[0]) || 0) - (Number(String(b.issue || "").match(/\d+/)?.[0]) || 0));
+      .sort((a, b) => issueSortValue(a) - issueSortValue(b));
   }
 
   function appendSeriesNavigation(item, controls, overlay) {
@@ -982,7 +1037,7 @@
     overlay.innerHTML = `
       <div class="reader-top">
         <button class="small-btn" data-close-reader>← Voltar</button>
-        <div class="reader-title">${escapeHTML(item.title)} — ${escapeHTML(item.issue || "")}</div>
+        <div class="reader-title">${escapeHTML(itemDisplayTitle(item))}</div>
         ${showModeSelector ? `
           <select class="small-btn" id="reading-mode-select">
             <option value="single-page" ${state.readingMode === 'single-page' ? 'selected' : ''}>Página por página</option>
@@ -1013,6 +1068,7 @@
     const closeReaderButton = $("[data-close-reader]", overlay);
     const cleanupReader = () => {
       if (activeReaderCleanup === cleanupReader) activeReaderCleanup = null;
+      overlay._cbzDownloadController?.abort();
       overlay.remove();
       if (options.localObjectUrl) URL.revokeObjectURL(options.localObjectUrl);
     };
@@ -1419,22 +1475,80 @@
   }
 
   async function renderCBZReader(item, url, body, controls, overlay, skipCover = false, resumePage = 1, onPageChange = () => {}) {
-    body.innerHTML = `<div class="empty" style="margin:auto">Baixando páginas do CBZ…</div>`;
+    const downloadController = new AbortController();
+    overlay._cbzDownloadController = downloadController;
+    let progressRoot;
+    let progressLabel;
+    let progressBar;
+    let progressDetail;
+    let progressSpinner;
+    const showCbzProgress = (message, value = null, detail = "") => {
+      if (!progressRoot || !progressRoot.isConnected) {
+        progressRoot = document.createElement("div");
+        progressRoot.className = "reader-loading";
+        progressRoot.setAttribute("role", "status");
+        progressLabel = document.createElement("div");
+        progressLabel.className = "reader-loading-label";
+        progressBar = document.createElement("progress");
+        progressBar.className = "reader-progress";
+        progressBar.max = 100;
+        progressDetail = document.createElement("div");
+        progressDetail.className = "reader-loading-detail";
+        progressSpinner = document.createElement("div");
+        progressSpinner.className = "reader-spinner";
+        progressRoot.append(progressLabel, progressBar, progressDetail, progressSpinner);
+        body.replaceChildren(progressRoot);
+      }
+      progressLabel.textContent = message;
+      if (value === null) {
+        progressBar.hidden = true;
+        progressDetail.hidden = true;
+        progressSpinner.hidden = false;
+      } else {
+        progressBar.hidden = false;
+        progressBar.value = value;
+        progressDetail.hidden = false;
+        progressDetail.textContent = detail;
+        progressSpinner.hidden = true;
+      }
+    };
+    showCbzProgress("Baixando páginas do CBZ…");
     try {
       if (!window.JSZip) throw new Error("JSZip não carregou.");
       const response = await fetch(proxiedFileUrl(url), {
         method: "GET",
         mode: "cors",
         credentials: "omit",
-        cache: "no-store"
+        cache: "no-store",
+        signal: downloadController.signal
       });
       if (!response.ok) throw new Error("HTTP " + response.status);
-      const buffer = await response.arrayBuffer();
+      let buffer;
+      const contentLength = Number(response.headers.get("content-length")) || 0;
+      if (response.body && contentLength) {
+        const reader = response.body.getReader();
+        const chunks = [];
+        let received = 0;
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          chunks.push(part.value);
+          received += part.value.byteLength;
+          showCbzProgress("Baixando páginas do CBZ…", Math.min(99, Math.round(received / contentLength * 100)), `${(received / 1048576).toFixed(1)} MB de ${(contentLength / 1048576).toFixed(1)} MB`);
+        }
+        const bytes = new Uint8Array(received);
+        let offset = 0;
+        chunks.forEach(chunk => { bytes.set(chunk, offset); offset += chunk.byteLength; });
+        buffer = bytes.buffer;
+      } else {
+        buffer = await response.arrayBuffer();
+      }
       const zip = await JSZip.loadAsync(buffer);
       const names = Object.keys(zip.files)
         .filter(n => !zip.files[n].dir && /\.(jpg|jpeg|png|webp|gif)$/i.test(n))
         .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
       if (!names.length) throw new Error("CBZ sem imagens.");
+      showCbzProgress("Preparando páginas…", 0, `0 de ${names.length} páginas`);
 
       const currentReadingMode = state.readingMode;
 
@@ -1535,11 +1649,13 @@
         const pageElements = [];
  
         // Eagerly load all pages to prevent layout shift and simplify logic
-        body.innerHTML = `<div class="empty" style="margin:auto">Extraindo todas as páginas...</div>`;
+        let extractedPages = 0;
         const pageData = await Promise.all(names.map(async (name) => {
           const blob = await zip.files[name].async("blob");
           const url = URL.createObjectURL(blob);
           objectUrls.push(url);
+          extractedPages += 1;
+          showCbzProgress("Extraindo páginas do CBZ…", Math.round(extractedPages / names.length * 100), `${extractedPages} de ${names.length} páginas`);
           return { src: url };
         }));
  
@@ -1602,11 +1718,13 @@
       if (modeSelect) {
         modeSelect.addEventListener('change', (e) => {
           setReadingMode(e.target.value);
+          overlay._cbzDownloadController?.abort();
           overlay.remove();
           openReader(item, { skipCover });
         });
       }
     } catch (err) {
+      if (err?.name === "AbortError" || !overlay.isConnected) return;
       // Local status helper for this function
       const status = (message) => body.innerHTML = `<div class="empty" style="margin:auto">${escapeHTML(message)}</div>`;
 
@@ -2568,22 +2686,39 @@
     });
   }
 
-  function card(item, progressMap = state.readingProgress, favoriteIds = state.favoriteIds) {
+  function card(item, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, directOpen = false) {
     const completed = progressFor(item, progressMap)?.completed;
+    const displayTitle = itemDisplayTitle(item);
+    const issueLabel = itemIssueLabel(item);
     return `
-      <article class="card" data-open="${escapeHTML(item.id)}">
+      <article class="card" data-open="${escapeHTML(item.id)}" ${directOpen ? "data-open-direct=\"true\"" : ""}>
         <div class="cover" data-cover-id="${escapeHTML(item.id)}" style="background-image:url('${escapeHTML(coverFor(item))}')">
-          <span class="cover-number">${escapeHTML(item.issue || "")}</span>
+          <span class="cover-number">${escapeHTML(issueLabel)}</span>
           <button class="card-favorite ${favoriteIds.has(item.id) ? 'is-favorite' : ''}" data-favorite="${escapeHTML(item.id)}" title="Salvar na estante">★</button>
         </div>
         ${completed ? '<div class="card-completed">✓ Concluída</div>' : ''}
         <div class="card-body">
-          <div class="card-title">${escapeHTML(item.seriesTitle || item.title)}</div>
+          <div class="card-title">${escapeHTML(displayTitle)}</div>
           <div class="card-meta">${formatType(item.type)} · ${escapeHTML(String(item.year || ""))}</div>
           <div class="card-stats">♥ ${Number(item.clicks || 0).toLocaleString("pt-BR")} leituras</div>
           <div class="card-actions"><button class="card-like ${state.comicLikeIds.has(item.id) ? "is-liked" : ""}" data-like-item="${escapeHTML(item.id)}" title="Curtir quadrinho">${state.comicLikeIds.has(item.id) ? "♥" : "♡"} ${state.comicLikeCounts.get(item.id) || 0}</button><button class="card-share" data-share-item="${escapeHTML(item.id)}" title="Compartilhar quadrinho">Compartilhar</button><button class="card-comment" data-comment-item="${escapeHTML(item.id)}" title="Ver comentários">Comentários</button></div>
         </div>
       </article>`;
+  }
+
+  function itemDisplayTitle(item) {
+    const base = item?.seriesTitle || item?.title || "Quadrinho";
+    const issue = String(item?.issue || "").trim();
+    if (!issue) return base;
+    const number = issue.match(/\d+/)?.[0];
+    return number ? `${base} #${Number(number)}` : `${base} — ${issue}`;
+  }
+
+  function itemIssueLabel(item) {
+    const issue = String(item?.issue || "").trim();
+    if (!item?.seriesId || !issue || !/^\d+(?:\.\d+)?$/.test(issue)) return issue;
+    const availableTotal = state.db.library.filter(entry => entry.seriesId === item.seriesId).length;
+    return availableTotal > 1 ? `${issue}/${availableTotal}` : issue;
   }
 
   function rail(title, items, subtitle = "", actionText = "") {
@@ -2603,9 +2738,17 @@
 
   function renderHome() {
     const lib = state.db.library;
-    const heroItem = weightedRandom(lib.filter(x => x.featured)) || lib[0];
+    let heroItem = lib.find(item => item.id === state.homeHeroId);
+    if (!heroItem) {
+      heroItem = weightedRandom(lib.filter(x => x.featured)) || lib[0];
+      state.homeHeroId = heroItem?.id || null;
+    }
     const mostClicked = uniqueCatalogItems([...lib].sort((a,b) => (b.clicks||0) - (a.clicks||0)).slice(0, 8));
-    const randoms = uniqueCatalogItems([...lib].sort(() => Math.random() - .5).slice(0, 8));
+    let randoms = state.homeRandomIds.map(id => lib.find(item => item.id === id)).filter(Boolean);
+    if (!randoms.length) {
+      randoms = uniqueCatalogItems([...lib].sort(() => Math.random() - .5).slice(0, 8));
+      state.homeRandomIds = randoms.map(item => item.id);
+    }
     const comics = uniqueCatalogItems(lib.filter(x => x.type === "comic").slice(0, 8));
 
     return `
@@ -2655,7 +2798,7 @@
     const filter = state.entityFilter || { kind: "character", value: "" };
     const allItems = state.db.library.filter(item => String(item[filter.kind] || "").toLowerCase() === String(filter.value || "").toLowerCase() && (filter.kind !== "publisher" || item.type === "comic"));
     const collectionFilter = state.collectionFilter || { field: "all", query: "" };
-    const items = filter.kind === "publisher" ? filterCollectionItems(allItems, collectionFilter.field, collectionFilter.query) : allItems;
+    const items = filter.kind === "publisher" ? uniqueCatalogItems(filterCollectionItems(allItems, collectionFilter.field, collectionFilter.query)) : allItems;
     const title = filter.kind === "publisher" ? "Editora" : "Personagem";
     if (filter.kind !== "publisher") return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) relacionadas a ${title.toLowerCase()}</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div><section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
     const setting = state.publisherSettings.get(publisherKey(filter.value));
@@ -2670,7 +2813,23 @@
       grouped.get(imprint).get(initial).push(item);
     });
     const initialOrder = ["0-9", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""), "#"];
-    const imprintMarkup = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, "pt-BR")).map(([imprint, initials]) => `<section class="search-imprint publisher-imprint"><div class="section-head"><div><h2 class="section-title">${escapeHTML(imprint)}</h2><div class="section-subtitle">Selo</div></div></div>${initialOrder.filter(initial => initials.has(initial)).map(initial => `<section class="search-initial"><h3 class="search-initial-title">${initial}</h3><div class="results-grid">${initials.get(initial).sort((a, b) => String(a.seriesTitle || a.title).localeCompare(String(b.seriesTitle || b.title), "pt-BR")).map(item => card(item)).join("")}</div></section>`).join("")}</section>`).join("");
+    const publisherGroupMarkupLegacy = groupItems => {
+      const seriesGroups = new Map();
+      groupItems.forEach(item => {
+        const key = item.seriesId || item.id;
+        if (!seriesGroups.has(key)) seriesGroups.set(key, []);
+        seriesGroups.get(key).push(item);
+      });
+      return [...seriesGroups.values()].sort((a, b) => String(a[0].seriesTitle || a[0].title).localeCompare(String(b[0].seriesTitle || b[0].title), "pt-BR")).map(seriesItems => {
+        const seriesKey = seriesItems[0].seriesId || seriesItems[0].id;
+        const expanded = Boolean(state.publisherSeriesExpanded[seriesKey]);
+        const orderedItems = seriesItems.sort((a, b) => issueSortValue(a) - issueSortValue(b));
+        const visibleItems = expanded ? orderedItems : orderedItems.slice(0, 1);
+        return `<div class="publisher-series-group"><div class="publisher-series-heading"><h4 class="publisher-series-title">${escapeHTML(seriesItems[0].seriesTitle || seriesItems[0].title)}</h4>${orderedItems.length > 1 ? `<button class="small-btn publisher-series-toggle" type="button" data-publisher-series-toggle="${escapeHTML(seriesKey)}">${expanded ? "Ocultar edições" : `Mostrar todas (${orderedItems.length})`}</button>` : ""}</div><div class="results-grid">${visibleItems.map(item => card(item)).join("")}</div></div>`;
+      }).join("");
+    };
+    const publisherGroupMarkup = groupItems => groupItems.sort((a, b) => String(a.seriesTitle || a.title).localeCompare(String(b.seriesTitle || b.title), "pt-BR")).map(item => card(item)).join("");
+    const imprintMarkup = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, "pt-BR")).map(([imprint, initials]) => `<section class="search-imprint publisher-imprint"><div class="section-head"><div><h2 class="section-title">${escapeHTML(imprint)}</h2><div class="section-subtitle">Selo</div></div></div>${initialOrder.filter(initial => initials.has(initial)).map(initial => `<section class="search-initial"><h3 class="search-initial-title">${initial}</h3><div class="results-grid publisher-initial-grid">${publisherGroupMarkup(initials.get(initial))}</div></section>`).join("")}</section>`).join("");
     return `<div class="content publisher-page"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) da editora</div></div><div class="publisher-page-actions"><button class="small-btn" data-section="home">Voltar ao início</button>${canManage ? `<button class="small-btn" data-publisher-settings="${escapeHTML(filter.value)}">Configurar editora</button>` : ""}</div></div>${setting?.is_pinned ? '<div class="publisher-pin-badge">★ Editora fixada no carrossel</div>' : ""}${imprintMarkup || '<div class="empty">Nenhuma edição encontrada.</div>'}</div>`;
   }
 
@@ -2723,12 +2882,14 @@
     const expanded = Boolean(state.shelfExpanded[key]);
     const visibleItems = expanded ? items : items.slice(0, SHELF_PREVIEW_LIMIT);
     const likedCollection = key === "read" && state.section === "shelf" ? shelfCollectionMarkup("Curtidas", shelfItemsByIds([...state.comicLikeIds]), "liked") : "";
-    return `<section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">${escapeHTML(title)}</h2><div class="section-subtitle">${items.length} item(ns)</div></div><div class="shelf-section-actions">${actions}${items.length > SHELF_PREVIEW_LIMIT ? `<button class="small-btn" data-shelf-expand="${escapeHTML(key)}">${expanded ? "Mostrar menos" : "Ver todos"}</button>` : ""}</div></div><div class="results-grid">${visibleItems.map(item => card(item, progressMap, favoriteIds)).join("") || '<div class="empty">Nenhum item nesta coleção.</div>'}</div></section>${likedCollection}`;
+    const directOpen = key === "saved" && state.section === "shelf";
+    return `<section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">${escapeHTML(title)}</h2><div class="section-subtitle">${items.length} item(ns)</div></div><div class="shelf-section-actions">${actions}${items.length > SHELF_PREVIEW_LIMIT ? `<button class="small-btn" data-shelf-expand="${escapeHTML(key)}">${expanded ? "Mostrar menos" : "Ver todos"}</button>` : ""}</div></div><div class="results-grid">${visibleItems.map(item => card(item, progressMap, favoriteIds, directOpen)).join("") || '<div class="empty">Nenhum item nesta coleção.</div>'}</div></section>${likedCollection}`;
   }
 
-  function shelfItemsByIds(ids) {
+  function shelfItemsByIds(ids, unique = true) {
     const allowed = new Set(ids);
-    return uniqueCatalogItems(state.db.library.filter(item => allowed.has(item.id)));
+    const items = state.db.library.filter(item => allowed.has(item.id));
+    return unique ? uniqueCatalogItems(items) : items;
   }
 
   async function saveShelfCategories(categories) {
@@ -2784,7 +2945,7 @@
   function renderShelfPage() {
     if (!state.session) return renderLoginPage();
     const snapshot = ensureShelfSnapshot();
-    const savedItems = shelfItemsByIds([...snapshot.saved]);
+    const savedItems = shelfItemsByIds([...snapshot.saved], false);
     const readItems = shelfItemsByIds([...snapshot.read]);
     const canCustomize = ["admin", "moderator", "premium"].includes(state.profile?.plan);
     const categories = state.shelfCategories.map(category => ({ ...category, itemIds: (category.itemIds || []).filter(id => snapshot.saved.has(id)) }));
@@ -3032,20 +3193,25 @@
 
   function render() {
     const main = $("#main");
-    if (state.section === "home") main.innerHTML = renderHome();
-    else if (state.section === "comic") main.innerHTML = renderCatalog("comic");
-    else if (state.section === "manga") main.innerHTML = renderCatalog("manga");
-    else if (state.section === "collections") main.innerHTML = renderCollections();
-    else if (state.section === "collection") main.innerHTML = renderCollectionPage();
-    else if (state.section === "search") main.innerHTML = renderSearch();
-    else if (state.section === "entity") main.innerHTML = renderEntityPage();
-    else if (state.section === "login") main.innerHTML = renderLoginPage();
-    else if (state.section === "signup") main.innerHTML = renderSignupPage();
-    else if (state.section === "shelf") main.innerHTML = renderShelfPage();
-    else if (state.section === "local-box") main.innerHTML = renderLocalBoxPage();
-    else if (state.section === "public-profile") main.innerHTML = renderPublicProfilePage();
-    else if (state.section === "password-reset") main.innerHTML = renderPasswordResetPage();
-    else if (state.section === "reader") main.innerHTML = "";
+    let markup = "";
+    if (state.section === "home") markup = renderHome();
+    else if (state.section === "comic") markup = renderCatalog("comic");
+    else if (state.section === "manga") markup = renderCatalog("manga");
+    else if (state.section === "collections") markup = renderCollections();
+    else if (state.section === "collection") markup = renderCollectionPage();
+    else if (state.section === "search") markup = renderSearch();
+    else if (state.section === "entity") markup = renderEntityPage();
+    else if (state.section === "login") markup = renderLoginPage();
+    else if (state.section === "signup") markup = renderSignupPage();
+    else if (state.section === "shelf") markup = renderShelfPage();
+    else if (state.section === "local-box") markup = renderLocalBoxPage();
+    else if (state.section === "public-profile") markup = renderPublicProfilePage();
+    else if (state.section === "password-reset") markup = renderPasswordResetPage();
+    if (main.innerHTML === markup) {
+      syncActiveNav();
+      return;
+    }
+    main.innerHTML = markup;
     bind();
     hydrateHomeCovers();
   }
@@ -3126,6 +3292,12 @@
     $$('[data-share-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); shareComic(el.dataset.shareItem); }));
     $$('[data-publisher]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openEntityPage("publisher", el.dataset.publisher); }));
     $$('[data-publisher-settings]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openPublisherSettings(el.dataset.publisherSettings); }));
+    $$('[data-publisher-series-toggle]').forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      const key = el.dataset.publisherSeriesToggle;
+      state.publisherSeriesExpanded[key] = !state.publisherSeriesExpanded[key];
+      render();
+    }));
     $$('[data-comment-item]').forEach(el => el.addEventListener("click", event => {
       event.stopPropagation();
       const item = state.db.library.find(entry => entry.id === el.dataset.commentItem);
@@ -3169,7 +3341,8 @@
     $("[data-collection-filter-form]")?.addEventListener("submit", event => { event.preventDefault(); const form = new FormData(event.currentTarget); state.collectionFilter = { field: String(form.get("field") || "all"), query: String(form.get("query") || "") }; render(); });
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
       const item = state.db.library.find(x => x.id === el.dataset.open);
-      openItem(item);
+      if (el.dataset.openDirect === "true") openReader(item);
+      else openItem(item);
     }));
     $$("[data-section]").forEach(el => el.addEventListener("click", () => {
       const s = el.dataset.section;
@@ -3278,7 +3451,7 @@
           <div><div class="eyebrow">Série</div><h2>${escapeHTML(series.seriesTitle || series.title)}</h2><div class="section-subtitle">${editions.length} edições disponíveis</div></div>
           <button class="small-btn" data-close>Fechar</button>
         </div>
-        <div class="results-grid">${editions.slice().sort((a,b) => String(a.issue || "").localeCompare(String(b.issue || ""), undefined, {numeric:true})).map(item => card(item)).join("")}</div>
+        <div class="results-grid">${editions.slice().sort((a, b) => issueSortValue(a) - issueSortValue(b)).map(item => card(item)).join("")}</div>
       </div>`;
     $("#modal-root").appendChild(overlay);
     hydrateHomeCovers();
@@ -3286,6 +3459,23 @@
     $$('[data-open]', overlay).forEach(el => el.addEventListener("click", () => {
       overlay.remove();
       openReader(state.db.library.find(x => x.id === el.dataset.open));
+    }));
+    $$('[data-favorite]', overlay).forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      toggleFavorite(el.dataset.favorite);
+    }));
+    $$('[data-like-item]', overlay).forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      toggleComicLike(el.dataset.likeItem);
+    }));
+    $$('[data-share-item]', overlay).forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      shareComic(el.dataset.shareItem);
+    }));
+    $$('[data-comment-item]', overlay).forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      const item = state.db.library.find(entry => entry.id === el.dataset.commentItem);
+      if (item) openCommentsPopup(item);
     }));
   }
 
@@ -3655,6 +3845,7 @@
 
   window.addEventListener("popstate", applyRoute);
   window.BancaDigital = { state, openReader, openAdmin };
+  const appRoot = document.getElementById("app");
   const pathParts = window.location.pathname.split("/").filter(Boolean);
   const routeParts = pathParts[0]?.toLowerCase() === "banca-digital-quadrinhos-v3" ? pathParts.slice(1) : pathParts;
   const queryProfile = new URLSearchParams(window.location.search).get("perfil");
@@ -3678,6 +3869,12 @@
     }
   });
   loadAccount()
-    .then(() => initialPublicUsername && loadPublicProfile(initialPublicUsername, queryPublicCollection))
-    .catch(error => console.warn("Supabase indisponível:", error));
+    .then(async () => {
+      if (state.section === "reader") applyRoute();
+      if (initialPublicUsername) await loadPublicProfile(initialPublicUsername, queryPublicCollection);
+    })
+    .catch(error => console.warn("Supabase indisponível:", error))
+    .finally(() => {
+      if (appRoot) appRoot.style.visibility = "";
+    });
 })();

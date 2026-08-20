@@ -246,6 +246,13 @@ main { min-height: calc(100vh - 150px); }
 .publisher-pin-badge { display: inline-block; margin: -4px 0 18px; padding: 6px 10px; border: 1px solid rgba(255,212,92,.45); border-radius: 999px; color: #ffd45c; font-size: 12px; }
 .publisher-imprint { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
 .publisher-imprint:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.publisher-series-group { margin: 0 0 22px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.02); }
+.publisher-series-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.publisher-series-title { margin: 0 0 12px; color: var(--text); font-size: 16px; }
+.publisher-page .results-grid { grid-template-columns: repeat(auto-fit, 180px); justify-content: start; align-items: stretch; }
+.publisher-page .card { width: 100%; height: 100%; box-sizing: border-box; }
+.publisher-page .card-title { min-height: 36px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.publisher-page .publisher-initial-grid { gap: 26px; align-items: stretch; }
 
 .search-wrap {
   display: flex; gap: 10px; max-width: 800px; margin: 25px auto 40px;
@@ -423,6 +430,12 @@ main { min-height: calc(100vh - 150px); }
   height: auto;
   max-height: none;
 }
+.reader-loading { width: min(100%, 420px); margin: auto; padding: 24px; text-align: center; color: var(--muted); }
+.reader-loading-label { margin-bottom: 12px; color: var(--text); font-weight: 700; }
+.reader-progress { display: block; width: 100%; height: 10px; accent-color: var(--accent); }
+.reader-loading-detail { margin-top: 8px; font-size: 12px; }
+.reader-spinner { width: 24px; height: 24px; margin: 14px auto 0; border: 3px solid rgba(255,255,255,.18); border-top-color: var(--accent); border-radius: 50%; animation: reader-spin .8s linear infinite; }
+@keyframes reader-spin { to { transform: rotate(360deg); } }
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.72);
   display: grid; place-items: center; padding: 20px;
