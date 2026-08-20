@@ -904,6 +904,13 @@
     $("#modal-root").appendChild(overlay);
     $("[data-close]", overlay).onclick = () => overlay.remove();
     const list = $(".comments-list", overlay);
+    const titleButton = document.createElement("button");
+    titleButton.type = "button";
+    titleButton.className = "comment-item-title";
+    titleButton.textContent = itemDisplayTitle(item);
+    titleButton.title = "Abrir quadrinho";
+    titleButton.onclick = () => { overlay.remove(); openReader(item); };
+    $(".section-head .section-subtitle", overlay)?.replaceWith(titleButton);
     const refresh = async () => {
       const result = await sb.from("comments").select("id, body, created_at, profiles(username, avatar_url, title, plan)").eq("item_id", item.id).order("created_at", { ascending: false });
       if (result.error) { list.innerHTML = '<span class="section-subtitle">Não foi possível carregar os comentários.</span>'; return; }
@@ -933,7 +940,10 @@
     panel.innerHTML = `<summary>Comentários</summary><div class="comments-content"><div class="comments-list"><span class="section-subtitle">Carregando...</span></div>${state.session ? '<form class="comment-form"><textarea name="body" maxlength="1000" required placeholder="Escreva um comentário..."></textarea><button class="small-btn" type="submit">Comentar</button></form>' : '<p class="section-subtitle">Entre para comentar.</p>'}</div>`;
     overlay.appendChild(panel);
     const list = $(".comments-list", panel);
-    const refresh = async () => renderCommentThread(list, await loadCommentThread(item));
+    const refresh = async () => {
+      renderCommentThread(list, await loadCommentThread(item));
+      linkCommentMentions(list);
+    };
     bindCommentThread(panel, item, list, refresh);
     await refresh();
     $(".comment-form", panel)?.addEventListener("submit", async event => {
@@ -957,7 +967,17 @@
     $("#modal-root").appendChild(overlay);
     $("[data-close]", overlay).onclick = () => overlay.remove();
     const list = $(".comments-list", overlay);
-    const refresh = async () => renderCommentThread(list, await loadCommentThread(item));
+    const refresh = async () => {
+      renderCommentThread(list, await loadCommentThread(item));
+      linkCommentMentions(list);
+    };
+    const titleButton = document.createElement("button");
+    titleButton.type = "button";
+    titleButton.className = "comment-item-title";
+    titleButton.textContent = itemDisplayTitle(item);
+    titleButton.title = "Abrir quadrinho";
+    titleButton.onclick = () => { overlay.remove(); openReader(item); };
+    $(".section-head .section-subtitle", overlay)?.replaceWith(titleButton);
     bindCommentThread(overlay, item, list, refresh);
     await refresh();
     $(".comment-form", overlay)?.addEventListener("submit", async event => {
@@ -1048,6 +1068,32 @@
       childrenByParent.get(comment.parent_id).push(comment);
     });
     list.innerHTML = (childrenByParent.get(null) || []).map(comment => commentMarkup(comment, childrenByParent, thread.likedIds, thread.counts)).join("") || '<span class="section-subtitle">Nenhum comentário ainda.</span>';
+  }
+
+  function linkCommentMentions(root) {
+    const mentionPattern = /@([A-Za-z0-9_]{3,24})/g;
+    $$('p', root).forEach(paragraph => {
+      const text = paragraph.textContent || "";
+      let match;
+      let cursor = 0;
+      let hasMention = false;
+      const fragment = document.createDocumentFragment();
+      while ((match = mentionPattern.exec(text))) {
+        hasMention = true;
+        fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+        const link = document.createElement("a");
+        link.className = "comment-mention";
+        link.href = publicProfileHref(match[1]);
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = match[0];
+        fragment.appendChild(link);
+        cursor = match.index + match[0].length;
+      }
+      if (!hasMention) return;
+      fragment.appendChild(document.createTextNode(text.slice(cursor)));
+      paragraph.replaceChildren(fragment);
+    });
   }
 
   function bindCommentThread(root, item, list, refresh) {
@@ -3499,6 +3545,12 @@
         await openChat(notification.actor);
       } else if (notification?.type === "collection_like" && notification.metadata?.collection_id) {
         openCollection(String(notification.metadata.collection_id));
+      } else if (notification?.type === "mention" && notification.metadata?.item_id) {
+        const item = state.db.library.find(entry => String(entry.id) === String(notification.metadata.item_id));
+        if (item) openCommentsPopup(item);
+        else openNotificationsPopup();
+      } else if (notification?.type === "follow" && notification.actor?.username) {
+        await loadPublicProfile(notification.actor.username);
       } else {
         openNotificationsPopup();
       }

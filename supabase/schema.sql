@@ -291,10 +291,18 @@ create trigger notify_comment_activity_trigger after insert on public.comments f
 create or replace function public.notify_comment_like()
 returns trigger language plpgsql security definer set search_path = public
 as $$
-declare v_owner uuid;
+declare
+  v_comment record;
+  v_body text;
 begin
-  select user_id into v_owner from public.comments where id = NEW.comment_id;
-  perform public.create_notification(v_owner, 'comment_like', 'Comentário curtido', 'Alguém curtiu seu comentário.', NEW.user_id, null, jsonb_build_object('comment_id', NEW.comment_id));
+  select user_id, item_id, parent_id into v_comment
+  from public.comments
+  where id = NEW.comment_id;
+  v_body := case when v_comment.parent_id is null
+    then 'Alguém curtiu seu comentário.'
+    else 'Alguém curtiu sua resposta.'
+  end;
+  perform public.create_notification(v_comment.user_id, 'comment_like', 'Comentário curtido', v_body, NEW.user_id, null, jsonb_build_object('comment_id', NEW.comment_id, 'item_id', v_comment.item_id));
   return NEW;
 end;
 $$;
