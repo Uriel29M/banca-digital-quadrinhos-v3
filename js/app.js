@@ -154,7 +154,11 @@
     localBoxVisible: false,
     publisherSettings: new Map(),
     publisherSeriesExpanded: {},
-    popularPublicCollections: []
+    popularPublicCollections: [],
+    blogPosts: [],
+    blogLoading: false,
+    blogTab: "recentes",
+    blogOpenId: null
   };
 
   let activeReaderCleanup = null;
@@ -163,6 +167,7 @@
   const sectionRoutes = {
     home: "",
     comic: "quadrinhos",
+    blog: "blogs",
     collections: "colecoes",
     search: "pesquisar",
     shelf: "estante",
@@ -217,6 +222,7 @@
       if (section === "search") state.search = params.get("q") || "";
       if (section === "entity") state.entityFilter = { kind: params.get("tipo") || "character", value: params.get("valor") || "" };
       render();
+      if (section === "blog" && !state.blogPosts.length) loadBlogPosts();
     }
     handlingRoute = false;
   }
@@ -266,6 +272,145 @@
 
   function cleanUsername(value) {
     return String(value || "").replace(/^@/, "").trim().toLowerCase();
+  }
+
+  function safeBlogHtml(value = "") {
+    const template = document.createElement("template");
+    template.innerHTML = String(value || "");
+    const allowed = new Set(["B", "STRONG", "I", "EM", "U", "S", "H2", "H3", "P", "BR", "BLOCKQUOTE", "UL", "OL", "LI", "A"]);
+    template.content.querySelectorAll("*").forEach(node => {
+      if (!allowed.has(node.tagName)) {
+        node.replaceWith(...Array.from(node.childNodes));
+        return;
+      }
+      const href = node.tagName === "A" ? node.getAttribute("href") || "" : "";
+      [...node.attributes].forEach(attribute => node.removeAttribute(attribute.name));
+      if (node.tagName === "A") {
+        if (!/^https?:\/\//i.test(href)) node.replaceWith(...Array.from(node.childNodes));
+        else {
+          node.setAttribute("href", href);
+          node.setAttribute("target", "_blank");
+          node.setAttribute("rel", "noopener noreferrer");
+        }
+      }
+    });
+    return template.innerHTML.trim();
+  }
+
+  function blogDate(value) {
+    if (!value) return "";
+    return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
+  }
+
+  function blogImageStyle(url) {
+    return url ? `style="background-image:url('${escapeHTML(url)}')"` : "";
+  }
+
+  async function loadBlogPosts() {
+    if (!sb) {
+      state.blogError = "A autenticação ainda não foi configurada.";
+      render();
+      return;
+    }
+    state.blogLoading = true;
+    state.blogError = "";
+    render();
+    const result = await sb.from("blog_posts")
+      .select("id, author_id, title, excerpt, content_html, cover_url, image_2_url, image_3_url, status, is_featured, created_at, updated_at, published_at, author:profiles(id, username, avatar_url, title, title_color)")
+      .eq("status", "published")
+      .order("is_featured", { ascending: false })
+      .order("published_at", { ascending: false });
+    state.blogLoading = false;
+    if (result.error) {
+      state.blogError = "Não foi possível carregar os blogs. Execute a atualização do schema no Supabase.";
+      state.blogPosts = [];
+    } else state.blogPosts = result.data || [];
+    render();
+  }
+
+  async function uploadBlogImage(file, index) {
+    if (!file?.size) return null;
+    if (!/^image\/(png|jpe?g|webp|gif)$/i.test(file.type)) throw new Error("Use imagens PNG, JPG, WEBP ou GIF.");
+    if (file.size > 8 * 1024 * 1024) throw new Error("Cada imagem pode ter no máximo 8 MB.");
+    const extension = String(file.name || "jpg").split(".").pop().toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+    const path = `${state.session.user.id}/${Date.now()}-${index}-${Math.random().toString(36).slice(2)}.${extension}`;
+    const upload = await sb.storage.from("blog-images").upload(path, file, { upsert: false, contentType: file.type || "image/jpeg" });
+    if (upload.error) throw new Error("Não foi possível enviar uma das imagens. Verifique o bucket blog-images no Supabase.");
+    return sb.storage.from("blog-images").getPublicUrl(path).data.publicUrl;
+  }
+
+  async function publishBlogPost(form) {
+    if (!state.session) return openAuthPage();
+    const data = new FormData(form);
+    const title = String(data.get("title") || "").trim();
+    const excerpt = String(data.get("excerpt") || "").trim();
+    const content = safeBlogHtml($("#blog-editor")?.innerHTML || "");
+    if (title.length < 3) return toast("Informe um título para o blog.");
+    if (!content) return toast("Escreva o conteúdo do blog antes de publicar.");
+    const button = $("button[type=submit]", form);
+    if (button) button.disabled = true;
+    try {
+      const imageUrls = [];
+      for (const [index, name] of ["cover", "image2", "image3"].entries()) imageUrls.push(await uploadBlogImage(data.get(name), index + 1));
+      const staff = ["moderator", "admin"].includes(state.profile?.plan);
+      const result = await sb.from("blog_posts").insert({
+        author_id: state.session.user.id,
+        title,
+        excerpt: excerpt.slice(0, 500),
+        content_html: content,
+        cover_url: imageUrls[0],
+        image_2_url: imageUrls[1],
+        image_3_url: imageUrls[2],
+        status: "published",
+        is_featured: staff && data.get("isFeatured") === "on",
+        published_at: new Date().toISOString()
+      });
+      if (result.error) return toast(result.error.message || "Não foi possível publicar o blog.");
+      state.blogTab = "recentes";
+      state.blogOpenId = null;
+      await loadBlogPosts();
+      toast("Blog publicado.");
+    } catch (error) {
+      toast(error.message || "Não foi possível publicar o blog.");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function toggleBlogFeatured(id, featured) {
+    if (!["moderator", "admin"].includes(state.profile?.plan)) return;
+    const result = await sb.from("blog_posts").update({ is_featured: !featured }).eq("id", id);
+    if (result.error) return toast("Não foi possível atualizar o destaque.");
+    await loadBlogPosts();
+    toast(featured ? "Blog removido dos destaques." : "Blog destacado.");
+  }
+
+  function blogCard(post, featured = false) {
+    const author = post.author || {};
+    const staff = ["moderator", "admin"].includes(state.profile?.plan);
+    return `<article class="blog-card ${featured ? "is-featured" : ""}" data-blog-open="${escapeHTML(post.id)}"><div class="blog-card-images"><div class="blog-card-cover ${post.cover_url ? "has-image" : ""}" ${blogImageStyle(post.cover_url)}></div><div class="blog-card-side"><div class="blog-card-side-image ${post.image_2_url ? "has-image" : ""}" ${blogImageStyle(post.image_2_url)}></div><div class="blog-card-side-image ${post.image_3_url ? "has-image" : ""}" ${blogImageStyle(post.image_3_url)}></div></div></div><div class="blog-card-body"><div class="eyebrow">${post.is_featured ? "Destaque" : "Blog"}</div><h3>${escapeHTML(post.title)}</h3><p>${escapeHTML(post.excerpt || "Confira esta publicação na Banca Digital.")}</p><div class="blog-card-meta">@${escapeHTML(author.username || "usuário")} · ${escapeHTML(blogDate(post.published_at || post.created_at))}</div><div class="blog-card-actions"><button class="small-btn" data-blog-read="${escapeHTML(post.id)}">Ler artigo</button>${staff ? `<button class="small-btn" data-blog-feature="${escapeHTML(post.id)}" data-blog-featured="${post.is_featured ? "true" : "false"}">${post.is_featured ? "Remover destaque" : "Destacar"}</button>` : ""}</div></div></article>`;
+  }
+
+  function renderBlogEditor() {
+    if (!state.session) return `<div class="notice">Entre na sua conta para escrever e publicar um blog.</div><button class="btn btn-danger" data-action="open-auth">Entrar</button>`;
+    const staff = ["moderator", "admin"].includes(state.profile?.plan);
+    return `<form id="blog-form" class="blog-editor-form"><div class="field"><label>Título</label><input name="title" maxlength="140" required placeholder="Título da sua publicação"></div><div class="field"><label>Resumo</label><textarea name="excerpt" maxlength="500" rows="3" placeholder="Uma chamada curta para os cards da aba Blogs"></textarea></div><div class="blog-image-fields"><div class="field"><label>Capa principal</label><input name="cover" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></div><div class="field"><label>Imagem lateral 1</label><input name="image2" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></div><div class="field"><label>Imagem lateral 2</label><input name="image3" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></div></div><div class="field"><label>Conteúdo</label><div class="blog-toolbar"><button type="button" data-blog-command="bold"><b>B</b></button><button type="button" data-blog-command="italic"><i>I</i></button><button type="button" data-blog-command="underline"><u>U</u></button><button type="button" data-blog-command="formatBlock" data-blog-value="h2">Título</button><button type="button" data-blog-command="formatBlock" data-blog-value="blockquote">Citação</button><button type="button" data-blog-command="insertUnorderedList">Lista</button><button type="button" data-blog-command="createLink">Link</button></div><div id="blog-editor" class="blog-editor" contenteditable="true" data-placeholder="Escreva sua notícia, análise ou história..."></div></div>${staff ? `<label class="checkbox-inline"><input name="isFeatured" type="checkbox"> Destacar na aba Blogs</label>` : ""}<div class="modal-actions"><button type="submit" class="btn btn-danger">Publicar blog</button></div></form>`;
+  }
+
+  function renderBlogPostPage(post) {
+    const author = post.author || {};
+    const staff = ["moderator", "admin"].includes(state.profile?.plan);
+    return `<div class="content blog-post-page"><div class="section-head"><div><div class="eyebrow">${post.is_featured ? "Blog em destaque" : "Blog"}</div><h1 class="section-title">${escapeHTML(post.title)}</h1><div class="section-subtitle">@${escapeHTML(author.username || "usuário")} · ${escapeHTML(blogDate(post.published_at || post.created_at))}</div></div><button class="small-btn" data-blog-back>Voltar aos blogs</button></div><div class="blog-post-gallery"><div class="blog-post-cover ${post.cover_url ? "has-image" : ""}" ${blogImageStyle(post.cover_url)}></div><div class="blog-post-side"><div class="blog-post-side-image ${post.image_2_url ? "has-image" : ""}" ${blogImageStyle(post.image_2_url)}></div><div class="blog-post-side-image ${post.image_3_url ? "has-image" : ""}" ${blogImageStyle(post.image_3_url)}></div></div></div>${post.excerpt ? `<p class="blog-post-excerpt">${escapeHTML(post.excerpt)}</p>` : ""}<article class="blog-post-content">${safeBlogHtml(post.content_html)}</article>${staff ? `<button class="small-btn" data-blog-feature="${escapeHTML(post.id)}" data-blog-featured="${post.is_featured ? "true" : "false"}">${post.is_featured ? "Remover destaque" : "Destacar blog"}</button>` : ""}</div>`;
+  }
+
+  function renderBlogsPage() {
+    if (state.blogOpenId) {
+      const post = state.blogPosts.find(item => String(item.id) === String(state.blogOpenId));
+      if (post) return renderBlogPostPage(post);
+    }
+    const featured = state.blogPosts.filter(post => post.is_featured);
+    const recent = state.blogPosts.filter(post => !post.is_featured);
+    return `<div class="content blogs-page"><div class="section-head"><div><div class="eyebrow">Comunidade</div><h1 class="section-title">Blogs</h1><div class="section-subtitle">Notícias, análises e histórias publicadas pelos leitores.</div></div><button class="btn btn-danger" data-blog-tab="escrever">Escrever blog</button></div><div class="blog-tabs"><button class="small-btn ${state.blogTab === "recentes" ? "is-active" : ""}" data-blog-tab="recentes">Recentes</button><button class="small-btn ${state.blogTab === "escrever" ? "is-active" : ""}" data-blog-tab="escrever">Escrever</button></div>${state.blogTab === "escrever" ? renderBlogEditor() : state.blogLoading ? '<div class="empty">Carregando blogs...</div>' : state.blogError ? `<div class="empty">${escapeHTML(state.blogError)}</div>` : `${featured.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">Em destaque</h2><div class="section-subtitle">Publicações selecionadas pela equipe.</div></div></div><div class="blog-grid blog-featured-grid">${featured.map(post => blogCard(post, true)).join("")}</div></section>` : ""}<section class="section"><div class="section-head"><div><h2 class="section-title">Recentes</h2><div class="section-subtitle">As últimas publicações da comunidade.</div></div></div><div class="blog-grid">${recent.map(post => blogCard(post)).join("") || '<div class="empty">Ainda não há blogs publicados.</div>'}</div></section>`}</div>`;
   }
 
   function publisherKey(value = "") {
@@ -3719,6 +3864,7 @@
     let markup = "";
     if (state.section === "home") markup = renderHome();
     else if (state.section === "comic") markup = renderCatalog("comic");
+    else if (state.section === "blog") markup = renderBlogsPage();
     else if (state.section === "manga") markup = renderCatalog("manga");
     else if (state.section === "collections") markup = renderCollections();
     else if (state.section === "collection") markup = renderCollectionPage();
@@ -3752,6 +3898,7 @@
     state.section = section;
     syncActiveNav();
     render();
+    if (section === "blog" && !state.blogPosts.length && !state.blogLoading) loadBlogPosts();
   }
 
   function openPublisherSettings(name) {
@@ -3835,6 +3982,20 @@
       if (actions) { const button = document.createElement("button"); button.className = "small-btn"; button.dataset.openChat = "true"; button.textContent = "Enviar mensagem"; actions.prepend(button); }
     }
     $('[data-open-chat]')?.addEventListener("click", () => openChat(state.publicProfile?.profile));
+    $$('[data-blog-tab]').forEach(el => el.addEventListener("click", () => { state.blogTab = el.dataset.blogTab; state.blogOpenId = null; render(); }));
+    $$('[data-blog-read]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); state.blogOpenId = el.dataset.blogRead; render(); }));
+    $('[data-blog-back]')?.addEventListener("click", () => { state.blogOpenId = null; state.blogTab = "recentes"; render(); });
+    $$('[data-blog-feature]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleBlogFeatured(el.dataset.blogFeature, el.dataset.blogFeatured === "true"); }));
+    $$('[data-blog-command]').forEach(el => el.addEventListener("click", () => {
+      const command = el.dataset.blogCommand;
+      const value = el.dataset.blogValue;
+      if (command === "createLink") {
+        const url = window.prompt("Cole o endereço do link:", "https://");
+        if (url) document.execCommand(command, false, url);
+      } else document.execCommand(command, false, value || null);
+      $("#blog-editor")?.focus();
+    }));
+    $("#blog-form")?.addEventListener("submit", event => { event.preventDefault(); publishBlogPost(event.currentTarget); });
     $$('[data-public-collection]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); loadPublicProfile(el.dataset.publicOwner, el.dataset.publicCollection); }));
     $$('[data-publisher-settings]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openPublisherSettings(el.dataset.publisherSettings); }));
     $$('[data-publisher-series-toggle]').forEach(el => el.addEventListener("click", event => {
