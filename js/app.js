@@ -41,6 +41,7 @@
     publicProfile: null,
     search: "",
     entityFilter: null,
+    collectionId: null,
     editingId: null,
     // Reading mode for PDF, CBZ, and CBR readers
     readingMode: localStorage.getItem("readingMode") || "single-page", // 'single-page', 'double-page', or 'continuous-scroll'
@@ -56,6 +57,68 @@
   };
 
   let activeReaderCleanup = null;
+  let handlingRoute = false;
+
+  const sectionRoutes = {
+    home: "",
+    comic: "quadrinhos",
+    manga: "mangas",
+    collections: "colecoes",
+    search: "pesquisar",
+    shelf: "estante",
+    "local-box": "caixa",
+    login: "entrar",
+    signup: "cadastro",
+    entity: "entidade"
+  };
+
+  function routeUrl(params = {}) {
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, value);
+    });
+    return `${url.pathname}${url.search}`;
+  }
+
+  function navigate(params, replace = false) {
+    const url = routeUrl(params);
+    if (replace) window.history.replaceState({}, "", url);
+    else window.history.pushState({}, "", url);
+    applyRoute();
+  }
+
+  function setSectionRoute(section, replace = false) {
+    const route = sectionRoutes[section];
+    if (route === undefined) return setSection(section);
+    navigate(route ? { pagina: route } : {}, replace);
+  }
+
+  function applyRoute() {
+    const params = new URLSearchParams(window.location.search);
+    const readerId = params.get("ler");
+    const page = params.get("pagina") || "";
+    const section = params.get("colecao") ? "collection" : Object.keys(sectionRoutes).find(key => sectionRoutes[key] === page) || "home";
+    const item = readerId ? state.db.library.find(entry => entry.id === readerId) : null;
+
+    activeReaderCleanup?.();
+    activeReaderCleanup = null;
+    handlingRoute = true;
+    if (readerId && item) {
+      state.section = "reader";
+      state.readerItemId = readerId;
+      render();
+      openReader(item, { routeSync: true });
+    } else {
+      state.section = section;
+      state.collectionId = params.get("colecao") || null;
+      if (section === "search") state.search = params.get("q") || "";
+      if (section === "entity") state.entityFilter = { kind: params.get("tipo") || "character", value: params.get("valor") || "" };
+      render();
+    }
+    handlingRoute = false;
+  }
 
   const sb = window.supabase?.createClient && window.BANCA_SUPABASE_URL
     ? window.supabase.createClient(window.BANCA_SUPABASE_URL, window.BANCA_SUPABASE_KEY)
@@ -454,7 +517,7 @@
 
   function openEntityPage(kind, value) {
     state.entityFilter = { kind, value };
-    setSection("entity");
+    navigate({ pagina: "entidade", tipo: kind, valor: value });
   }
 
   async function attachComments(item, overlay) {
@@ -538,6 +601,11 @@
   function openReader(item, options = {}) {
     if (!item) return;
 
+    if (!item.local && !options.routeSync) {
+      navigate({ ler: item.id });
+      return;
+    }
+
     activeReaderCleanup?.();
     activeReaderCleanup = null;
 
@@ -604,8 +672,11 @@
       overlay.remove();
       if (options.localObjectUrl) URL.revokeObjectURL(options.localObjectUrl);
     };
-    activeReaderCleanup = () => closeReaderButton.click();
-    closeReaderButton.onclick = cleanupReader;
+    activeReaderCleanup = cleanupReader;
+    closeReaderButton.onclick = () => {
+      cleanupReader();
+      if (!handlingRoute && new URLSearchParams(window.location.search).get("ler")) window.history.back();
+    };
     $("[data-open-external]", overlay).onclick = () => window.open(resolvedUrl, "_blank", "noopener");
     $("[data-toggle-cover]", overlay)?.addEventListener("click", () => {
       overlay.remove();
@@ -2350,12 +2421,20 @@
       </div>`;
   }
 
+  function renderCollectionPage() {
+    const collection = state.db.collections.find(item => item.id === state.collectionId);
+    if (!collection) return renderCollections();
+    const items = collection.issueIds.map(id => state.db.library.find(item => item.id === id)).filter(Boolean);
+    return `<div class="content"><div class="section-head"><div><div class="eyebrow">Coleção</div><h1 class="section-title">${escapeHTML(collection.title)}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div><button class="small-btn" data-section="collections">Voltar às coleções</button></div><p class="section-subtitle">${escapeHTML(collection.description || "")}</p><div class="results-grid">${items.map(item => card(item)).join("") || '<div class="empty">Coleção vazia.</div>'}</div></div>`;
+  }
+
   function render() {
     const main = $("#main");
     if (state.section === "home") main.innerHTML = renderHome();
     else if (state.section === "comic") main.innerHTML = renderCatalog("comic");
     else if (state.section === "manga") main.innerHTML = renderCatalog("manga");
     else if (state.section === "collections") main.innerHTML = renderCollections();
+    else if (state.section === "collection") main.innerHTML = renderCollectionPage();
     else if (state.section === "search") main.innerHTML = renderSearch();
     else if (state.section === "entity") main.innerHTML = renderEntityPage();
     else if (state.section === "login") main.innerHTML = renderLoginPage();
@@ -2364,11 +2443,16 @@
     else if (state.section === "local-box") main.innerHTML = renderLocalBoxPage();
     else if (state.section === "public-profile") main.innerHTML = renderPublicProfilePage();
     else if (state.section === "password-reset") main.innerHTML = renderPasswordResetPage();
+    else if (state.section === "reader") main.innerHTML = "";
     bind();
     hydrateHomeCovers();
   }
 
   function setSection(section) {
+    if (!handlingRoute && sectionRoutes[section] !== undefined) {
+      setSectionRoute(section);
+      return;
+    }
     state.section = section;
     $$(".nav-link").forEach(btn => btn.classList.toggle("active", btn.dataset.section === section || (section === "comic" && btn.dataset.section === "comics")));
     render();
@@ -2402,7 +2486,7 @@
       if (a === "home") setSection("home");
       if (a === "random") openItem(weightedRandom(uniqueCatalogItems(state.db.library)));
       if (a === "focus-search") { setSection("search"); setTimeout(() => $("#search-input")?.focus(), 30); }
-      if (a === "do-search") { state.search = $("#search-input")?.value || ""; render(); $("#search-input")?.focus(); }
+      if (a === "do-search") { state.search = $("#search-input")?.value || ""; navigate({ pagina: "pesquisar", q: state.search }); }
       if (a === "open-admin") { if (canManage) openAdmin(); }
       if (a === "open-auth") state.session ? setSection("shelf") : openAuthPage();
       if (a === "logout") signOut();
@@ -2512,24 +2596,7 @@
   }
 
   function openCollection(id) {
-    const c = state.db.collections.find(x => x.id === id);
-    if (!c) return;
-    const items = c.issueIds.map(i => state.db.library.find(x => x.id === i)).filter(Boolean);
-    const overlay = document.createElement("div");
-    overlay.className = "modal-backdrop";
-    overlay.innerHTML = `
-      <div class="modal">
-        <div class="section-head"><div><h2>${escapeHTML(c.title)}</h2><div class="section-subtitle">${items.length} edições</div></div><button class="small-btn" data-close>Fechar</button></div>
-        <p style="color:#aaa">${escapeHTML(c.description || "")}</p>
-        <div class="results-grid">${items.map(item => card(item)).join("") || `<div class="empty">Coleção vazia.</div>`}</div>
-      </div>`;
-    $("#modal-root").appendChild(overlay);
-    hydrateHomeCovers();
-    $("[data-close]", overlay).onclick = () => overlay.remove();
-    $$("[data-open]", overlay).forEach(el => el.onclick = () => {
-      overlay.remove();
-      openItem(state.db.library.find(x => x.id === el.dataset.open));
-    });
+    if (state.db.collections.some(collection => collection.id === id)) navigate({ pagina: "colecoes", colecao: id });
   }
 
   function detectFormat(url = "") {
@@ -2841,6 +2908,7 @@
     $("#submission-form", overlay).onsubmit = event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const seriesTitle = String(fd.get("seriesTitle") || "").trim(); state.db.submissions.push({ id: "sub-" + Date.now(), author: String(fd.get("author") || "").trim(), seriesTitle, seriesId: seriesTitle ? seriesKey(seriesTitle) : "", title: String(fd.get("title") || "").trim(), issue: String(fd.get("issue") || "").trim(), type: fd.get("type"), year: Number(fd.get("year")) || "", publisher: String(fd.get("publisher") || "").trim(), character: String(fd.get("character") || "").trim(), fileUrl: String(fd.get("sourceUrl") || "").trim(), format: detectFormat(fd.get("sourceUrl") || ""), message: String(fd.get("message") || ""), createdAt: new Date().toISOString() }); save(); overlay.remove(); toast("Envio registrado para análise."); };
   }
 
+  window.addEventListener("popstate", applyRoute);
   window.BancaDigital = { state, openReader, openAdmin };
   const pathParts = window.location.pathname.split("/").filter(Boolean);
   const routeParts = pathParts[0]?.toLowerCase() === "banca-digital-quadrinhos-v3" ? pathParts.slice(1) : pathParts;
@@ -2854,7 +2922,8 @@
     state.section = "public-profile";
     state.publicProfile = { loading: true, username: initialPublicUsername };
   }
-  render();
+  if (initialPublicUsername) render();
+  else applyRoute();
   sb?.auth.onAuthStateChange((event, session) => {
     if (event === "PASSWORD_RECOVERY") {
       state.session = session;
