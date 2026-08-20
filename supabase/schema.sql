@@ -445,6 +445,52 @@ $$;
 drop trigger if exists notify_comment_like_trigger on public.comment_likes;
 create trigger notify_comment_like_trigger after insert on public.comment_likes for each row execute procedure public.notify_comment_like();
 
+create or replace function public.notify_blog_comment_activity()
+returns trigger language plpgsql security definer set search_path = public
+as $$
+declare
+  v_blog_author uuid;
+  v_parent_author uuid;
+  v_mentioned record;
+  v_mentioned_id uuid;
+  v_href text := '?pagina=blogs&blog=' || NEW.blog_id::text;
+begin
+  select author_id into v_blog_author from public.blog_posts where id = NEW.blog_id;
+  if NEW.parent_id is not null then
+    select user_id into v_parent_author from public.blog_comments where id = NEW.parent_id;
+    perform public.create_notification(v_parent_author, 'comment_reply', 'Nova resposta no blog', 'Alguém respondeu ao seu comentário em um blog.', NEW.user_id, v_href, jsonb_build_object('blog_id', NEW.blog_id, 'comment_id', NEW.id));
+  else
+    perform public.create_notification(v_blog_author, 'comment_reply', 'Novo comentário no seu blog', 'Alguém comentou em uma publicação sua.', NEW.user_id, v_href, jsonb_build_object('blog_id', NEW.blog_id, 'comment_id', NEW.id));
+  end if;
+  for v_mentioned in select distinct lower((regexp_matches(NEW.body, '@([A-Za-z0-9_]{3,24})', 'gi'))[1]) as username loop
+    select id into v_mentioned_id from public.profiles where lower(username) = v_mentioned.username limit 1;
+    if v_mentioned_id is not null and exists (select 1 from public.profiles where id = v_mentioned_id and allow_mentions) then
+      perform public.create_notification(v_mentioned_id, 'mention', 'Você foi mencionado em um comentário de blog', 'Alguém mencionou você em um comentário.', NEW.user_id, v_href, jsonb_build_object('blog_id', NEW.blog_id, 'comment_id', NEW.id));
+    end if;
+    v_mentioned_id := null;
+  end loop;
+  return NEW;
+end;
+$$;
+
+drop trigger if exists notify_blog_comment_activity_trigger on public.blog_comments;
+create trigger notify_blog_comment_activity_trigger after insert on public.blog_comments for each row execute procedure public.notify_blog_comment_activity();
+
+create or replace function public.notify_blog_comment_like()
+returns trigger language plpgsql security definer set search_path = public
+as $$
+declare
+  v_comment record;
+begin
+  select user_id, blog_id into v_comment from public.blog_comments where id = NEW.blog_comment_id;
+  perform public.create_notification(v_comment.user_id, 'comment_like', 'Comentário de blog curtido', 'Alguém curtiu seu comentário em um blog.', NEW.user_id, '?pagina=blogs&blog=' || v_comment.blog_id::text, jsonb_build_object('blog_id', v_comment.blog_id, 'comment_id', NEW.blog_comment_id));
+  return NEW;
+end;
+$$;
+
+drop trigger if exists notify_blog_comment_like_trigger on public.blog_comment_likes;
+create trigger notify_blog_comment_like_trigger after insert on public.blog_comment_likes for each row execute procedure public.notify_blog_comment_like();
+
 create or replace function public.notify_moderation_action()
 returns trigger language plpgsql security definer set search_path = public
 as $$
