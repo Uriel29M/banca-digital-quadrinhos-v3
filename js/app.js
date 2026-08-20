@@ -162,7 +162,7 @@
   }
 
   function avatarMarkup(profile, className = "profile-avatar") {
-    const planClass = profile?.plan === "admin" ? "avatar-admin" : profile?.plan === "premium" ? "avatar-premium" : "";
+    const planClass = profile?.plan === "admin" ? "avatar-admin" : profile?.plan === "moderator" ? "avatar-moderator" : profile?.plan === "premium" ? "avatar-premium" : "";
     return `<img class="${className} ${planClass}" src="${escapeHTML(profile?.avatar_url || DEFAULT_AVATAR_URL)}" alt="Foto de ${escapeHTML(profile?.username || "usuário")}">`;
   }
 
@@ -189,6 +189,13 @@
     if (session?.user) {
       const profile = await sb.from("profiles").select("*").eq("id", session.user.id).single();
       state.profile = profile.data;
+      if (state.profile?.is_banned && !["moderator", "admin"].includes(state.profile.plan)) {
+        await sb.auth.signOut();
+        state.session = null;
+        state.profile = null;
+        render();
+        return toast("Sua conta está banida.");
+      }
       const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids").eq("owner_id", session.user.id).order("created_at", { ascending: true });
       state.shelfCategories = (collections.data || []).map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, itemIds: Array.isArray(collection.item_ids) ? collection.item_ids : [] }));
       const favorites = await sb.from("favorites").select("item_id").eq("user_id", session.user.id);
@@ -213,7 +220,7 @@
       render();
       return;
     }
-    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_read_public").ilike("username", username).maybeSingle();
+    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_read_public, profile_hidden, is_banned, silenced_until").ilike("username", username).maybeSingle();
     if (profile.error) {
       profile = await sb.from("profiles").select("id, username, avatar_url, title, plan").ilike("username", username).maybeSingle();
     }
@@ -227,6 +234,12 @@
     const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids").eq("owner_id", profile.data.id).order("created_at", { ascending: true });
     const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", profile.data.id);
     const likes = await sb.from("shelf_collection_likes").select("collection_id, user_id").eq("owner_id", profile.data.id);
+    const moderationHistory = ["moderator", "admin"].includes(state.profile?.plan)
+      ? await sb.from("moderation_actions").select("id, actor_id, action, duration_until, details, created_at").eq("target_id", profile.data.id).order("created_at", { ascending: false })
+      : { data: [] };
+    const actorIds = [...new Set((moderationHistory.data || []).map(entry => entry.actor_id).filter(Boolean))];
+    const actors = actorIds.length ? await sb.from("profiles").select("id, username").in("id", actorIds) : { data: [] };
+    const actorNames = new Map((actors.data || []).map(actor => [actor.id, actor.username]));
     const collectionLikes = new Set((likes.data || []).filter(row => row.user_id === state.session?.user?.id).map(row => row.collection_id));
     const collectionLikeCounts = (likes.data || []).reduce((counts, row) => counts.set(row.collection_id, (counts.get(row.collection_id) || 0) + 1), new Map());
     state.publicProfile = {
@@ -238,6 +251,7 @@
       achievements: (achievements.data || []).map(row => row.achievements).filter(Boolean),
       collectionLikes,
       collectionLikeCounts
+      ,moderationHistory: (moderationHistory.data || []).map(entry => ({ ...entry, actor_username: actorNames.get(entry.actor_id) || "moderador" }))
     };
     render();
   }
@@ -687,7 +701,7 @@
       if (!body) return;
       const button = $("button", form); button.disabled = true;
       const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
-      if (result.error) toast(result.error.message); else { awardAchievement("first_comment"); form.reset(); await refresh(); }
+      if (result.error) toast(commentWriteError(result.error)); else { awardAchievement("first_comment"); form.reset(); await refresh(); }
       button.disabled = false;
     });
   }
@@ -711,7 +725,7 @@
       if (!body) return;
       const button = $("button", form); button.disabled = true;
       const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
-      if (result.error) toast(result.error.message); else { awardAchievement("first_comment"); form.reset(); await refresh(); }
+      if (result.error) toast(commentWriteError(result.error)); else { awardAchievement("first_comment"); form.reset(); await refresh(); }
       button.disabled = false;
     });
   }
@@ -719,6 +733,12 @@
   function formatCommentDate(value) {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(date);
+  }
+
+  function commentWriteError(error) {
+    const message = String(error?.message || "");
+    if (/row-level security|permission denied|comments/i.test(message)) return "Você está impedido de comentar no momento.";
+    return "Não foi possível publicar o comentário.";
   }
 
   async function loadCommentThread(item) {
@@ -735,12 +755,43 @@
     return { comments, likedIds, counts };
   }
 
+  async function loadCommentThread(item) {
+    let result = await sb.from("comments").select("id, parent_id, user_id, body, created_at").eq("item_id", item.id).order("created_at", { ascending: false });
+    if (result.error && /parent_id|schema cache|column/i.test(result.error.message || "")) {
+      const legacyResult = await sb.from("comments").select("id, user_id, body, created_at").eq("item_id", item.id).order("created_at", { ascending: false });
+      result = { ...legacyResult, data: (legacyResult.data || []).map(comment => ({ ...comment, parent_id: null })) };
+    }
+    if (result.error) {
+      console.error("[COMMENTS] Falha ao carregar comentários:", result.error);
+      return { error: result.error };
+    }
+    const comments = result.data || [];
+    const userIds = [...new Set(comments.map(comment => comment.user_id).filter(Boolean))];
+    const profilesResult = userIds.length
+      ? await sb.from("profiles").select("id, username, avatar_url, title, plan").in("id", userIds)
+      : { data: [] };
+    const profiles = new Map((profilesResult.data || []).map(profile => [profile.id, profile]));
+    comments.forEach(comment => { comment.profiles = profiles.get(comment.user_id) || {}; });
+    const likes = comments.length ? await sb.from("comment_likes").select("comment_id, user_id").in("comment_id", comments.map(comment => comment.id)) : { data: [] };
+    const likedIds = new Set((likes.data || []).filter(row => row.user_id === state.session?.user?.id).map(row => row.comment_id));
+    const counts = (likes.data || []).reduce((map, row) => map.set(row.comment_id, (map.get(row.comment_id) || 0) + 1), new Map());
+    return { comments, likedIds, counts };
+  }
+
   function commentMarkup(comment, childrenByParent, likedIds, likeCounts) {
     const username = cleanUsername(comment.profiles?.username || "usuário");
     const profile = { ...(comment.profiles || {}), username };
     const children = childrenByParent.get(comment.id) || [];
     const replies = children.map(child => commentMarkup(child, childrenByParent, likedIds, likeCounts)).join("");
-    return `<article class="comment" data-comment-id="${comment.id}"><div class="comment-author-row">${avatarMarkup(profile, "comment-avatar")}<div class="comment-author-info"><a class="comment-author" href="${publicProfileHref(username)}" target="_blank" rel="noopener">@${escapeHTML(username)}</a>${profile.title ? `<span class="comment-title">${escapeHTML(profile.title)}</span>` : ""}</div></div><p>${escapeHTML(comment.body)}</p><div class="comment-actions"><button class="comment-action ${likedIds.has(comment.id) ? "is-liked" : ""}" data-comment-like="${comment.id}">♥ ${likeCounts.get(comment.id) || 0}</button><button class="comment-action" data-comment-reply="${comment.id}">Responder</button>${children.length ? `<button class="comment-action" data-comment-toggle="${comment.id}">Ver ${children.length} resposta${children.length === 1 ? "" : "s"}</button>` : ""}<time class="comment-date" datetime="${escapeHTML(comment.created_at)}">${escapeHTML(formatCommentDate(comment.created_at))}</time></div><div class="comment-replies" data-comment-replies="${comment.id}" hidden>${replies}</div></article>`;
+    const canDelete = state.session?.user?.id === comment.user_id || ["moderator", "admin"].includes(state.profile?.plan);
+    return `<article class="comment" data-comment-id="${comment.id}"><div class="comment-author-row">${avatarMarkup(profile, "comment-avatar")}<div class="comment-author-info"><a class="comment-author" href="${publicProfileHref(username)}" target="_blank" rel="noopener">@${escapeHTML(username)}</a>${profile.title ? `<span class="comment-title">${escapeHTML(profile.title)}</span>` : ""}</div></div><p>${escapeHTML(comment.body)}</p><div class="comment-actions"><button class="comment-action ${likedIds.has(comment.id) ? "is-liked" : ""}" data-comment-like="${comment.id}">♥ ${likeCounts.get(comment.id) || 0}</button><button class="comment-action" data-comment-reply="${comment.id}">Responder</button>${children.length ? `<button class="comment-action" data-comment-toggle="${comment.id}">Ver ${children.length} resposta${children.length === 1 ? "" : "s"}</button>` : ""}${canDelete ? `<button class="comment-action comment-delete-action" data-comment-delete="${comment.id}">Excluir</button>` : ""}<time class="comment-date" datetime="${escapeHTML(comment.created_at)}">${escapeHTML(formatCommentDate(comment.created_at))}</time></div><div class="comment-replies" data-comment-replies="${comment.id}" hidden>${replies}</div></article>`;
+  }
+
+  async function deleteComment(commentId, root, refresh) {
+    if (!state.session?.user?.id || !window.confirm("Excluir este comentário e suas respostas?")) return;
+    const result = await sb.from("comments").delete().eq("id", commentId);
+    if (result.error) return toast("Não foi possível excluir o comentário.");
+    await refresh();
   }
 
   function renderCommentThread(list, thread) {
@@ -771,6 +822,12 @@
         await refresh();
         return;
       }
+      const deleteButton = event.target.closest("[data-comment-delete]");
+      if (deleteButton) {
+        event.preventDefault();
+        await deleteComment(Number(deleteButton.dataset.commentDelete), root, refresh);
+        return;
+      }
       const toggle = event.target.closest("[data-comment-toggle]");
       if (toggle) {
         const replies = $(`[data-comment-replies="${toggle.dataset.commentToggle}"]`, root);
@@ -794,7 +851,7 @@
       const parentId = Number(form.closest("[data-comment-id]")?.dataset.commentId);
       const button = $("button", form); button.disabled = true;
       const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, parent_id: parentId, body });
-      if (result.error) toast(result.error.message); else { form.remove(); await refresh(); }
+      if (result.error) toast(commentWriteError(result.error)); else { form.remove(); await refresh(); }
       button.disabled = false;
     });
   }
@@ -802,7 +859,7 @@
   function openProfileSettings() {
     if (!state.session) return openAuthPage();
     const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
-    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Meu perfil</h2><div class="section-subtitle">Personalize seu @, sua foto e a visibilidade da estante</div></div><button class="small-btn" data-close>Fechar</button></div><form id="profile-form"><div class="form-grid"><div class="field full"><label>@usuário</label><input name="username" pattern="[A-Za-z0-9_]{3,24}" required value="${escapeHTML(state.profile?.username || "")}"></div><div class="field full"><label>Foto de perfil</label><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></div>${["admin", "premium"].includes(state.profile?.plan) ? `<div class="field full"><label>Visibilidade no perfil público</label><label class="checkbox-inline"><input name="shelfSavedPublic" type="checkbox" ${state.profile?.shelf_saved_public !== false ? "checked" : ""}> Mostrar coleção Salvos</label><label class="checkbox-inline"><input name="shelfReadPublic" type="checkbox" ${state.profile?.shelf_read_public !== false ? "checked" : ""}> Mostrar coleção Lidos</label></div>` : ""}</div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar perfil</button></div></form></div>`;
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Meu perfil</h2><div class="section-subtitle">Personalize seu @, sua foto e a visibilidade da estante</div></div><button class="small-btn" data-close>Fechar</button></div><form id="profile-form"><div class="form-grid"><div class="field full"><label>@usuário</label><input name="username" pattern="[A-Za-z0-9_]{3,24}" required value="${escapeHTML(state.profile?.username || "")}"></div><div class="field full"><label>Foto de perfil</label><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></div>${["admin", "moderator", "premium"].includes(state.profile?.plan) ? `<div class="field full"><label>Visibilidade no perfil público</label><label class="checkbox-inline"><input name="shelfSavedPublic" type="checkbox" ${state.profile?.shelf_saved_public !== false ? "checked" : ""}> Mostrar coleção Salvos</label><label class="checkbox-inline"><input name="shelfReadPublic" type="checkbox" ${state.profile?.shelf_read_public !== false ? "checked" : ""}> Mostrar coleção Lidos</label></div>` : ""}</div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar perfil</button></div></form></div>`;
     $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
     const profileForm = $("#profile-form", overlay);
     const emailField = document.createElement("div");
@@ -811,7 +868,7 @@
     emailField.className = "field full profile-email-field";
     emailField.innerHTML = `<label>Email de recuperação <span class="field-optional">(opcional)</span></label><input name="email" type="email" placeholder="voce@email.com" autocomplete="email" value="${hasRecoveryEmail ? escapeHTML(currentEmail) : ""}"><small class="format-hint">Adicionar um email permite recuperar a conta e usá-lo para entrar depois.</small>`;
     $(".form-grid", profileForm).appendChild(emailField);
-    $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const preferences = ["admin", "premium"].includes(state.profile?.plan) ? { shelf_saved_public: fd.get("shelfSavedPublic") === "on", shelf_read_public: fd.get("shelfReadPublic") === "on" } : {}; const update = await sb.from("profiles").update({ username, avatar_url, ...preferences }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url, ...preferences }; overlay.remove(); render(); toast("Perfil atualizado."); };
+    $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const preferences = ["admin", "moderator", "premium"].includes(state.profile?.plan) ? { shelf_saved_public: fd.get("shelfSavedPublic") === "on", shelf_read_public: fd.get("shelfReadPublic") === "on" } : {}; const update = await sb.from("profiles").update({ username, avatar_url, ...preferences }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url, ...preferences }; overlay.remove(); render(); toast("Perfil atualizado."); };
     $("#profile-form", overlay).addEventListener("submit", async event => {
       const email = String(new FormData(event.currentTarget).get("email") || "").trim().toLowerCase();
       if (!email) return;
@@ -2556,7 +2613,7 @@
 
   function openAccountPlanAdmin() {
     const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
-    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Alterar tipo de conta</h2><div class="section-subtitle">Mude uma conta entre gratuita e premium.</div></div><button class="small-btn" data-close>Fechar</button></div><form id="account-plan-form"><div class="form-grid"><div class="field full"><label>@ do usuário</label><input name="username" required placeholder="usuario"></div><div class="field full"><label>Novo tipo de conta</label><select name="plan"><option value="free">Free</option><option value="premium">Premium</option></select></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar alteração</button></div></form></div>`;
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Alterar tipo de conta</h2><div class="section-subtitle">Defina o nível de acesso da conta.</div></div><button class="small-btn" data-close>Fechar</button></div><form id="account-plan-form"><div class="form-grid"><div class="field full"><label>@ do usuário</label><input name="username" required placeholder="usuario"></div><div class="field full"><label>Novo tipo de conta</label><select name="plan"><option value="free">Free</option><option value="premium">Premium</option><option value="moderator">Moderador</option></select></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar alteração</button></div></form></div>`;
     $("#modal-root").appendChild(overlay);
     $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
     $("#account-plan-form", overlay).onsubmit = async event => {
@@ -2598,7 +2655,8 @@
   function shelfCollectionMarkup(title, items, key, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, actions = "") {
     const expanded = Boolean(state.shelfExpanded[key]);
     const visibleItems = expanded ? items : items.slice(0, SHELF_PREVIEW_LIMIT);
-    return `<section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">${escapeHTML(title)}</h2><div class="section-subtitle">${items.length} item(ns)</div></div><div class="shelf-section-actions">${actions}${items.length > SHELF_PREVIEW_LIMIT ? `<button class="small-btn" data-shelf-expand="${escapeHTML(key)}">${expanded ? "Mostrar menos" : "Ver todos"}</button>` : ""}</div></div><div class="results-grid">${visibleItems.map(item => card(item, progressMap, favoriteIds)).join("") || '<div class="empty">Nenhum item nesta coleção.</div>'}</div></section>`;
+    const likedCollection = key === "read" && state.section === "shelf" ? shelfCollectionMarkup("Curtidas", shelfItemsByIds([...state.comicLikeIds]), "liked") : "";
+    return `<section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">${escapeHTML(title)}</h2><div class="section-subtitle">${items.length} item(ns)</div></div><div class="shelf-section-actions">${actions}${items.length > SHELF_PREVIEW_LIMIT ? `<button class="small-btn" data-shelf-expand="${escapeHTML(key)}">${expanded ? "Mostrar menos" : "Ver todos"}</button>` : ""}</div></div><div class="results-grid">${visibleItems.map(item => card(item, progressMap, favoriteIds)).join("") || '<div class="empty">Nenhum item nesta coleção.</div>'}</div></section>${likedCollection}`;
   }
 
   function shelfItemsByIds(ids) {
@@ -2652,7 +2710,6 @@
   }
 
   function deleteShelfCategory(categoryId) {
-    if (!confirm("Excluir esta subcategoria? Os quadrinhos não serão excluídos da coleção Salvos.")) return;
     state.shelfCategories = state.shelfCategories.filter(category => category.id !== categoryId);
     saveShelfCategories(state.shelfCategories);
   }
@@ -2662,7 +2719,7 @@
     const snapshot = ensureShelfSnapshot();
     const savedItems = shelfItemsByIds([...snapshot.saved]);
     const readItems = shelfItemsByIds([...snapshot.read]);
-    const canCustomize = ["admin", "premium"].includes(state.profile?.plan);
+    const canCustomize = ["admin", "moderator", "premium"].includes(state.profile?.plan);
     const categories = state.shelfCategories.map(category => ({ ...category, itemIds: (category.itemIds || []).filter(id => snapshot.saved.has(id)) }));
     return `<div class="content"><div class="profile-header">${avatarMarkup(state.profile)}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">Coleções fixas para organizar seus quadrinhos</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div>${shelfCollectionMarkup("Salvos", savedItems, "saved")}${shelfCollectionMarkup("Lidos", readItems, "read")}${canCustomize ? `<section class="section shelf-categories"><div class="section-head"><div><h2 class="section-title">Coleções pessoais</h2><div class="section-subtitle">Coleções públicas aparecem no seu perfil e podem ser compartilhadas</div></div><button class="small-btn" data-shelf-new-category>+ Nova coleção</button></div>${categories.map(category => shelfCollectionMarkup(category.name, shelfItemsByIds(category.itemIds), `category:${category.id}`, state.readingProgress, state.favoriteIds, `<span class="shelf-visibility ${category.isPublic !== false ? "is-public" : "is-private"}">${category.isPublic !== false ? "Pública" : "Privada"}</span>${category.isPublic !== false ? `<button class="small-btn" data-copy-collection="${escapeHTML(category.id)}">Compartilhar</button>` : ""}<button class="small-btn" data-shelf-edit-category="${escapeHTML(category.id)}">Editar</button><button class="small-btn danger" data-shelf-delete-category="${escapeHTML(category.id)}">Excluir</button>`)).join("") || '<div class="empty">Crie uma coleção para começar a organizar seus salvos.</div>'}</section>` : ""}</div>`;
   }
@@ -2707,19 +2764,86 @@
     render();
   }
 
+  async function runModerationAction(target, action, duration = null, title = null, titleColor = null) {
+    if (!sb || !target?.username) return;
+    const result = await sb.rpc("moderate_user", { p_username: target.username, p_action: action, p_duration: duration, p_title: title, p_title_color: titleColor });
+    if (result.error) return toast(result.error.message || "Não foi possível aplicar a moderação.");
+    toast("Ação de moderação aplicada.");
+    await loadPublicProfile(target.username, state.publicProfile?.collectionId || null);
+  }
+
+  function attachPlanControl(overlay, target) {
+    if (!overlay || !target || !["moderator", "admin"].includes(state.profile?.plan)) return;
+    const historySection = $(".moderation-history", overlay)?.closest(".moderation-section");
+    if (!historySection) return;
+    const planSection = document.createElement("section");
+    planSection.className = "moderation-section";
+    planSection.innerHTML = `<h3>Tipo de conta</h3><form id="moderation-plan-form"><div class="moderation-plan-row"><select name="plan"><option value="free" ${target.plan === "free" ? "selected" : ""}>Free</option><option value="premium" ${target.plan === "premium" ? "selected" : ""}>Premium</option></select><button class="small-btn" type="submit">Salvar tipo</button></div></form>`;
+    historySection.before(planSection);
+    $("#moderation-plan-form", planSection).onsubmit = async event => {
+      event.preventDefault();
+      const plan = String(new FormData(event.currentTarget).get("plan") || "free");
+      const result = await sb.rpc("set_user_plan", { p_username: target.username, p_plan: plan });
+      if (result.error) return toast(result.error.message || "Não foi possível alterar o tipo de conta.");
+      toast("Tipo de conta atualizado.");
+      overlay.remove();
+      await loadPublicProfile(target.username, state.publicProfile?.collectionId || null);
+    };
+  }
+
+  function openModerationPanel(target) {
+    if (!target || !["moderator", "admin"].includes(state.profile?.plan)) return;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    const history = state.publicProfile?.moderationHistory || [];
+    overlay.innerHTML = `<div class="modal moderation-modal"><div class="section-head"><div><h2>Moderação de @${escapeHTML(target.username)}</h2><div class="section-subtitle">Disponível para moderadores e administradores</div></div><button class="small-btn" data-close>Fechar</button></div><div class="admin-actions moderation-actions"><button class="small-btn danger" data-moderation="ban">Banir usuário</button><button class="small-btn" data-moderation="hide">Ocultar perfil</button><button class="small-btn" data-moderation="unban">Remover banimento</button><button class="small-btn" data-moderation="unhide">Mostrar perfil</button><button class="small-btn" data-moderation="unsilence">Remover silêncio</button></div><div class="field"><label>Silenciar comentários</label><div class="admin-actions"><button class="small-btn" data-silence="24h">24 horas</button><button class="small-btn" data-silence="3d">3 dias</button><button class="small-btn" data-silence="1m">1 mês</button></div></div><form id="moderation-title-form"><div class="field"><label>Título do perfil</label><input name="title" value="${escapeHTML(target.title || "")}" maxlength="80"></div><div class="field"><label>Cor do título</label><input name="titleColor" type="color" value="${escapeHTML(safeTitleColor(target.title_color))}"></div><button class="small-btn" type="submit">Salvar título</button></form><h3>Histórico de moderação</h3><div class="moderation-history">${history.map(entry => `<div class="moderation-history-item"><b>${escapeHTML(entry.action)}</b><span>@${escapeHTML(entry.actor_username || "moderador")} · ${escapeHTML(formatCommentDate(entry.created_at))}</span></div>`).join("") || '<span class="section-subtitle">Nenhuma ação registrada.</span>'}</div></div>`;
+    $("#modal-root").appendChild(overlay);
+    $("[data-close]", overlay).onclick = () => overlay.remove();
+    $$('[data-moderation]', overlay).forEach(button => button.onclick = async () => { await runModerationAction(target, button.dataset.moderation); overlay.remove(); });
+    $$('[data-silence]', overlay).forEach(button => button.onclick = async () => { await runModerationAction(target, "silence", button.dataset.silence); overlay.remove(); });
+    $("#moderation-title-form", overlay).onsubmit = async event => { event.preventDefault(); const form = new FormData(event.currentTarget); await runModerationAction(target, "title", null, String(form.get("title") || ""), String(form.get("titleColor") || "#ffd45c")); overlay.remove(); };
+  }
+
+  function openModerationPanel(target) {
+    if (!target || !["moderator", "admin"].includes(state.profile?.plan)) return;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    const history = state.publicProfile?.moderationHistory || [];
+    const visibilityAction = target.profile_hidden ? "unhide" : "hide";
+    const visibilityLabel = target.profile_hidden ? "Mostrar perfil" : "Ocultar perfil";
+    const banAction = target.is_banned ? "unban" : "ban";
+    const banLabel = target.is_banned ? "Remover banimento" : "Banir usuário";
+    const silenceLabel = target.silenced_until ? `Silenciado até ${formatCommentDate(target.silenced_until)}` : "Usuário pode comentar";
+    overlay.innerHTML = `<div class="modal moderation-modal"><div class="section-head moderation-header"><div><div class="eyebrow">Painel de moderação</div><h2>@${escapeHTML(target.username)}</h2><div class="section-subtitle">Ações registradas no histórico do perfil</div></div><button class="small-btn" data-close>Fechar</button></div><div class="moderation-status">${target.profile_hidden ? "Perfil oculto" : "Perfil público"} · ${target.is_banned ? "Banido" : "Conta ativa"} · ${escapeHTML(silenceLabel)}</div><div class="moderation-grid"><section class="moderation-section"><h3>Perfil e acesso</h3><div class="moderation-button-grid"><button class="small-btn" data-moderation="${visibilityAction}">${visibilityLabel}</button><button class="small-btn danger" data-moderation="${banAction}">${banLabel}</button></div></section><section class="moderation-section"><h3>Comentários</h3><div class="admin-actions"><button class="small-btn" data-silence="24h">Silenciar 24 horas</button><button class="small-btn" data-silence="3d">Silenciar 3 dias</button><button class="small-btn" data-silence="1m">Silenciar 1 mês</button><button class="small-btn" data-moderation="unsilence">Remover silêncio</button></div></section></div><section class="moderation-section"><h3>Título do perfil</h3><form id="moderation-title-form"><div class="moderation-title-fields"><div class="field"><label>Texto</label><input name="title" value="${escapeHTML(target.title || "")}" maxlength="80" placeholder="Título do usuário"></div><div class="field"><label>Cor</label><input name="titleColor" type="color" value="${escapeHTML(safeTitleColor(target.title_color))}"></div></div><button class="small-btn" type="submit">Salvar título</button></form></section><section class="moderation-section"><h3>Histórico</h3><div class="moderation-history">${history.map(entry => `<div class="moderation-history-item"><b>${escapeHTML(entry.action)}</b><span>@${escapeHTML(entry.actor_username || "moderador")} · ${escapeHTML(formatCommentDate(entry.created_at))}</span></div>`).join("") || '<span class="section-subtitle">Nenhuma ação registrada.</span>'}</div></section></div>`;
+    $("#modal-root").appendChild(overlay);
+    $("[data-close]", overlay).onclick = () => overlay.remove();
+    $$('[data-moderation]', overlay).forEach(button => button.onclick = async () => { await runModerationAction(target, button.dataset.moderation); overlay.remove(); });
+    $$('[data-silence]', overlay).forEach(button => button.onclick = async () => { await runModerationAction(target, "silence", button.dataset.silence); overlay.remove(); });
+    $("#moderation-title-form", overlay).onsubmit = async event => { event.preventDefault(); const form = new FormData(event.currentTarget); await runModerationAction(target, "title", null, String(form.get("title") || ""), String(form.get("titleColor") || "#ffd45c")); overlay.remove(); };
+  }
+
+  async function deletePublicCollection(ownerId, collectionId) {
+    if (state.profile?.plan !== "admin") return;
+    const result = await sb.from("shelf_collections").delete().eq("owner_id", ownerId).eq("id", collectionId);
+    if (result.error) return toast("Não foi possível excluir a coleção.");
+    toast("Coleção pública excluída.");
+    await loadPublicProfile(state.publicProfile.profile.username);
+  }
+
   function renderPublicProfilePage() {
     const publicState = state.publicProfile;
     if (!publicState || publicState.loading) return '<div class="content"><div class="empty">Carregando perfil...</div></div>';
     if (publicState.error) return `<div class="content"><div class="empty">${escapeHTML(publicState.error)}</div></div>`;
     const profile = publicState.profile;
-    const savedVisible = !["admin", "premium"].includes(profile.plan) || profile.shelf_saved_public !== false;
-    const readVisible = !["admin", "premium"].includes(profile.plan) || profile.shelf_read_public !== false;
+    const savedVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_saved_public !== false;
+    const readVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_read_public !== false;
     const savedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.favoriteIds.has(item.id)));
     const readItems = uniqueCatalogItems(state.db.library.filter(item => publicState.readingProgress.get(item.id)?.completed));
     const publicCategories = (publicState.collections || []).filter(category => category.isPublic !== false);
     const selectedCategory = publicCategories.find(category => category.id === publicState.collectionId);
     if (publicState.collectionId && selectedCategory) return renderPublicCollectionPage(publicState, selectedCategory);
     if (publicState.collectionId && !selectedCategory) return `<div class="content"><div class="empty">Esta coleção não existe ou é privada.</div><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username))}">Voltar ao perfil</a></div>`;
+    const canModerate = ["moderator", "admin"].includes(state.profile?.plan) && !["moderator", "admin"].includes(profile.plan);
     return `<div class="content public-profile-page">
       <div class="profile-header">
         ${avatarMarkup(profile)}
@@ -2729,7 +2853,7 @@
           ${trophyRoom(publicState.achievements)}
         </div>
       </div>
-      <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">Coleções públicas do perfil</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div>
+      <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">Coleções públicas do perfil</div></div><div class="profile-actions"><button class="small-btn" data-section="home">Voltar ao início</button>${canModerate ? `<button class="small-btn moderation-button" data-open-moderation>Moderação</button>` : ""}</div></div>
       ${savedVisible ? shelfCollectionMarkup("Salvos", savedItems, "public-saved", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Salvos está oculta neste perfil.</div>'}
       ${readVisible ? shelfCollectionMarkup("Lidos", readItems, "public-read", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Lidos está oculta neste perfil.</div>'}
       ${publicCategories.map(category => { const items = uniqueCatalogItems(state.db.library.filter(item => (category.itemIds || []).includes(item.id) && publicState.favoriteIds.has(item.id))); const liked = publicState.collectionLikes?.has(category.id); const likes = publicState.collectionLikeCounts?.get(category.id) || 0; return shelfCollectionMarkup(category.name, items, `public-category:${category.id}`, publicState.readingProgress, publicState.favoriteIds, `<span class="shelf-visibility is-public">Pública</span><button class="small-btn ${liked ? "is-liked" : ""}" data-like-collection="${escapeHTML(category.id)}" data-like-owner="${escapeHTML(profile.id)}">${liked ? "♥" : "♡"} ${likes}</button><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username, category.id))}">Abrir coleção</a><button class="small-btn" data-copy-collection="${escapeHTML(category.id)}" data-copy-username="${escapeHTML(profile.username)}">Compartilhar</button>`); }).join("")}
@@ -2862,6 +2986,7 @@
       headerAvatar.innerHTML = avatarMarkup(state.profile, "top-avatar-img");
       headerAvatar.title = state.session ? "Abrir minha estante" : "Entrar ou abrir minha estante";
       headerAvatar.classList.toggle("avatar-admin", state.profile?.plan === "admin");
+      headerAvatar.classList.toggle("avatar-moderator", state.profile?.plan === "moderator");
       headerAvatar.classList.toggle("avatar-premium", state.profile?.plan === "premium");
     }
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
@@ -2890,7 +3015,25 @@
       }
       el.addEventListener("click", event => { event.stopPropagation(); copyCollectionLink(el.dataset.copyCollection, el.dataset.copyUsername || state.profile?.username); });
     });
+    if (state.section === "public-profile" && state.publicProfile?.collectionId && state.profile?.plan === "admin") {
+      const actions = $(".public-collection-page .shelf-section-actions");
+      const category = state.publicProfile.collections?.find(item => item.id === state.publicProfile.collectionId);
+      if (actions && category && !$("[data-admin-delete-public-collection]", actions)) {
+        const button = document.createElement("button");
+        button.className = "small-btn danger";
+        button.textContent = "Excluir coleção";
+        button.dataset.adminDeletePublicCollection = category.id;
+        button.dataset.collectionOwner = state.publicProfile.profile.id;
+        button.onclick = () => deletePublicCollection(button.dataset.collectionOwner, button.dataset.adminDeletePublicCollection);
+        actions.appendChild(button);
+      }
+    }
     $$('[data-like-collection]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleCollectionLike(el.dataset.likeOwner, el.dataset.likeCollection); }));
+    $('[data-open-moderation]')?.addEventListener("click", () => {
+      const target = state.publicProfile?.profile;
+      openModerationPanel(target);
+      setTimeout(() => attachPlanControl($(".moderation-modal")?.closest(".modal-backdrop"), target), 0);
+    });
     $("[data-collection-filter-form]")?.addEventListener("submit", event => { event.preventDefault(); const form = new FormData(event.currentTarget); state.collectionFilter = { field: String(form.get("field") || "all"), query: String(form.get("query") || "") }; render(); });
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
       const item = state.db.library.find(x => x.id === el.dataset.open);
