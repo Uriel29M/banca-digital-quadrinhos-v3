@@ -3123,8 +3123,68 @@
     $("[data-close]", overlay).onclick = () => overlay.remove();
   }
 
+  const CHAT_ROOMS = [
+    { id: "geral", name: "Chat Geral", access: "public" },
+    { id: "decenautas", name: "Decenautas", access: "public" },
+    { id: "marvetes", name: "Marvetes", access: "public" },
+    { id: "leitores-colecionadores", name: "Leitores e Colecionadores", access: "premium" },
+    { id: "staff", name: "Chat da Staff", access: "staff" }
+  ];
+
+  function canOpenChatRoom(room) {
+    return room.access === "public"
+      || (room.access === "premium" && ["premium", "admin"].includes(state.profile?.plan))
+      || (room.access === "staff" && ["moderator", "admin"].includes(state.profile?.plan));
+  }
+
+  function chatRoomLabel(room) {
+    return room.access === "premium" ? "Premium" : room.access === "staff" ? "Staff" : "Público";
+  }
+
+  async function openChatRoom(room) {
+    if (!state.session || !sb || !room || !canOpenChatRoom(room)) return toast("Você não tem acesso a esta sala.");
+    $$('.chat-modal').forEach(modal => modal.closest('.modal-backdrop')?.remove());
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal chat-modal"><div class="section-head"><div><h2>${escapeHTML(room.name)}</h2><div class="section-subtitle">Sala ${chatRoomLabel(room).toLowerCase()} · mensagens expiram em 24 horas</div></div><button class="small-btn" data-close>Fechar</button></div><div class="chat-messages" data-chat-messages><div class="empty">Carregando mensagens...</div></div><form class="chat-compose" id="chat-room-compose"><textarea name="body" maxlength="2000" rows="2" required placeholder="Escreva uma mensagem ou marque alguém com @usuario"></textarea><button type="submit" class="btn btn-danger">Enviar</button></form></div>`;
+    $("#modal-root").appendChild(overlay);
+    let closed = false;
+    let channel = null;
+    const close = event => {
+      event?.preventDefault();
+      event?.stopPropagation();
+      if (closed) return;
+      closed = true;
+      channel?.unsubscribe();
+      overlay.remove();
+    };
+    $("[data-close]", overlay).onclick = close;
+    const messagesRoot = $("[data-chat-messages]", overlay);
+    const renderMessages = async () => {
+      const result = await sb.from("chat_messages").select("id, sender_id, body, created_at, profiles(username)").eq("room_id", room.id).gt("expires_at", new Date().toISOString()).order("created_at", { ascending: true }).limit(200);
+      if (result.error) return messagesRoot.innerHTML = '<div class="empty">Não foi possível carregar as mensagens.</div>';
+      messagesRoot.innerHTML = (result.data || []).map(message => `<div class="chat-message ${message.sender_id === state.session.user.id ? "is-mine" : ""}"><strong>@${escapeHTML(message.profiles?.username || "usuário")}</strong><div>${escapeHTML(message.body)}</div><small>${escapeHTML(formatCommentDate(message.created_at))}</small></div>`).join("") || '<div class="empty">Nenhuma mensagem ainda.</div>';
+      messagesRoot.scrollTop = messagesRoot.scrollHeight;
+    };
+    await renderMessages();
+    channel = sb.channel(`chat-room-${room.id}-${state.session.user.id}`).on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: `room_id=eq.${room.id}` }, payload => { if (payload.new?.room_id === room.id) renderMessages(); }).subscribe();
+    $("#chat-room-compose", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const body = String(form.get("body") || "").trim();
+      const button = $("button[type=submit]", event.currentTarget);
+      if (!body || button.disabled) return;
+      button.disabled = true;
+      const result = await sb.from("chat_messages").insert({ sender_id: state.session.user.id, room_id: room.id, recipient_id: null, body, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
+      if (result.error) toast(result.error.message || "Não foi possível enviar a mensagem.");
+      else { event.currentTarget.reset(); await renderMessages(); }
+      button.disabled = false;
+    };
+  }
+
   async function openChat(contact = null) {
     $$('.notifications-popup-modal').forEach(modal => modal.closest('.modal-backdrop')?.remove());
+    $$('.chat-modal').forEach(modal => modal.closest('.modal-backdrop')?.remove());
     if (!state.session || !sb) return openAuthPage();
     if (contact?.id === state.session.user.id) return toast("Você não pode enviar mensagens para si mesmo.");
     state.chatContact = contact?.id ? contact : null;
@@ -3139,7 +3199,12 @@
     overlay.className = "modal-backdrop";
     overlay.innerHTML = `<div class="modal chat-modal"><div class="section-head"><div><h2>Mensagens</h2><div class="section-subtitle">As mensagens desaparecem após 24 horas.</div></div><button class="small-btn" data-close>Fechar</button></div><div class="chat-contact-picker">${contact ? `<div class="chat-contact-selected">Conversando com <b>@${escapeHTML(contact.username)}</b></div>` : `<form id="chat-contact-form"><input name="username" required placeholder="Nome de usuário"><button type="submit" class="small-btn">Abrir conversa</button></form>`}</div>${contact ? `<div class="chat-messages" data-chat-messages><div class="empty">Carregando mensagens...</div></div><form class="chat-compose" id="chat-compose"><textarea name="body" maxlength="2000" rows="2" required placeholder="Escreva uma mensagem"></textarea><button type="submit" class="btn btn-danger">Enviar</button></form>` : `<div class="notice">Abra o perfil de um usuário e clique em “Enviar mensagem”, ou pesquise o nome de usuário acima.</div>`}</div>`;
     $("#modal-root").appendChild(overlay);
-    const close = () => {
+    let closed = false;
+    const close = event => {
+      event?.preventDefault();
+      event?.stopPropagation();
+      if (closed) return;
+      closed = true;
       state.chatContact = null;
       channel?.unsubscribe();
       overlay.remove();
@@ -3148,6 +3213,9 @@
     $("[data-close]", overlay).onclick = close;
     let channel = null;
     if (!contact) {
+      const availableRooms = CHAT_ROOMS.filter(canOpenChatRoom);
+      $(".chat-contact-picker", overlay).insertAdjacentHTML("afterbegin", `<div class="chat-room-list"><div class="chat-room-list-title">Salas de conversa</div>${availableRooms.map(room => `<button type="button" class="chat-room-option" data-chat-room="${escapeHTML(room.id)}"><span>${escapeHTML(room.name)}</span><small>${chatRoomLabel(room)}</small></button>`).join("")}</div>`);
+      $$('[data-chat-room]', overlay).forEach(button => button.onclick = () => { overlay.remove(); openChatRoom(CHAT_ROOMS.find(room => room.id === button.dataset.chatRoom)); });
       $("#chat-contact-form", overlay).onsubmit = async event => {
         event.preventDefault();
         const username = String(new FormData(event.currentTarget).get("username") || "").trim();
@@ -3512,7 +3580,7 @@
   }
 
   function notificationIcon(type) {
-    return ({ achievement: "🏆", moderation: "⚖", plan: "★", message: "✉", follow: "♥", collection_like: "♥", comment_reply: "↩", comment_like: "♥", mention: "@", announcement: "!" }[type] || "•");
+    return ({ achievement: "🏆", moderation: "⚖", plan: "★", message: "✉", chat_mention: "@", follow: "♥", collection_like: "♥", comment_reply: "↩", comment_like: "♥", mention: "@", announcement: "!" }[type] || "•");
   }
 
   function renderNotifications() {
@@ -3543,6 +3611,10 @@
       overlay.remove();
       if (notification?.type === "message" && notification.actor?.id) {
         await openChat(notification.actor);
+      } else if (notification?.type === "chat_mention" && notification.metadata?.room_id) {
+        const room = CHAT_ROOMS.find(entry => entry.id === notification.metadata.room_id);
+        if (room) await openChatRoom(room);
+        else openNotificationsPopup();
       } else if (notification?.type === "collection_like" && notification.metadata?.collection_id) {
         openCollection(String(notification.metadata.collection_id));
       } else if (notification?.type === "mention" && notification.metadata?.item_id) {

@@ -98,6 +98,28 @@ create table if not exists public.chat_messages (
 create index if not exists chat_messages_sender_recipient_idx on public.chat_messages(sender_id, recipient_id, created_at desc);
 create index if not exists chat_messages_expires_idx on public.chat_messages(expires_at);
 
+create table if not exists public.chat_rooms (
+  id text primary key,
+  name text not null unique,
+  access text not null default 'public' check (access in ('public', 'premium', 'staff'))
+);
+
+insert into public.chat_rooms (id, name, access) values
+  ('geral', 'Chat Geral', 'public'),
+  ('decenautas', 'Decenautas', 'public'),
+  ('marvetes', 'Marvetes', 'public'),
+  ('leitores-colecionadores', 'Leitores e Colecionadores', 'premium'),
+  ('staff', 'Chat da Staff', 'staff')
+on conflict (id) do update set name = excluded.name, access = excluded.access;
+
+alter table public.chat_messages add column if not exists room_id text references public.chat_rooms(id) on delete cascade;
+alter table public.chat_messages alter column recipient_id drop not null;
+alter table public.chat_messages drop constraint if exists chat_messages_destination_check;
+alter table public.chat_messages add constraint chat_messages_destination_check check (
+  (room_id is null and recipient_id is not null) or (room_id is not null and recipient_id is null)
+);
+create index if not exists chat_messages_room_created_idx on public.chat_messages(room_id, created_at desc);
+
 do $$
 begin
   alter publication supabase_realtime add table public.chat_messages;
@@ -236,6 +258,7 @@ as $$
 declare
   v_preview text := regexp_replace(trim(NEW.body), '\s+', ' ', 'g');
 begin
+  if NEW.room_id is not null then return NEW; end if;
   if char_length(v_preview) > 300 then
     v_preview := left(v_preview, 297) || '...';
   end if;
@@ -243,6 +266,51 @@ begin
   return NEW;
 end;
 $$;
+
+create or replace function public.can_access_chat_room(p_room_id text)
+returns boolean language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.chat_rooms room
+    left join public.profiles profile on profile.id = auth.uid()
+    where room.id = p_room_id
+      and (
+        room.access = 'public'
+        or (room.access = 'premium' and profile.plan in ('premium', 'admin'))
+        or (room.access = 'staff' and profile.plan in ('moderator', 'admin'))
+      )
+  )
+$$;
+
+create or replace function public.notify_chat_mentions()
+returns trigger language plpgsql security definer set search_path = public
+as $$
+declare
+  v_mentioned record;
+  v_mentioned_id uuid;
+begin
+  for v_mentioned in select distinct lower((regexp_matches(NEW.body, '@([A-Za-z0-9_]{3,24})', 'gi'))[1]) as username loop
+    select id into v_mentioned_id from public.profiles where lower(username) = v_mentioned.username limit 1;
+    if v_mentioned_id is not null and v_mentioned_id <> NEW.sender_id then
+      perform public.create_notification(
+        v_mentioned_id,
+        'chat_mention',
+        'Você foi mencionado no chat',
+        'Alguém mencionou você em uma conversa.',
+        NEW.sender_id,
+        null,
+        jsonb_build_object('room_id', NEW.room_id, 'message_id', NEW.id)
+      );
+    end if;
+    v_mentioned_id := null;
+  end loop;
+  return NEW;
+end;
+$$;
+
+drop trigger if exists notify_chat_mentions_trigger on public.chat_messages;
+create trigger notify_chat_mentions_trigger after insert on public.chat_messages for each row execute procedure public.notify_chat_mentions();
 
 drop trigger if exists notify_new_chat_message_trigger on public.chat_messages;
 create trigger notify_new_chat_message_trigger after insert on public.chat_messages for each row execute procedure public.notify_new_chat_message();
@@ -377,6 +445,7 @@ alter table public.publisher_settings enable row level security;
 alter table public.profile_follows enable row level security;
 alter table public.notifications enable row level security;
 alter table public.chat_messages enable row level security;
+alter table public.chat_rooms enable row level security;
 alter table public.favorites enable row level security;
 alter table public.comic_likes enable row level security;
 alter table public.reading_progress enable row level security;
@@ -399,6 +468,7 @@ drop policy if exists "admins insert notifications" on public.notifications;
 drop policy if exists "participants read chat messages" on public.chat_messages;
 drop policy if exists "users send chat messages" on public.chat_messages;
 drop policy if exists "participants delete chat messages" on public.chat_messages;
+drop policy if exists "chat rooms are visible to members" on public.chat_rooms;
 drop policy if exists "users update own profile" on public.profiles;
 drop policy if exists "users read own favorites" on public.favorites;
 drop policy if exists "favorites are public" on public.favorites;
@@ -432,8 +502,22 @@ create policy "users manage own follows" on public.profile_follows for all using
 create policy "users read own notifications" on public.notifications for select using (auth.uid() = user_id);
 create policy "users update own notifications" on public.notifications for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "admins insert notifications" on public.notifications for insert with check (public.is_admin());
-create policy "participants read chat messages" on public.chat_messages for select using ((auth.uid() = sender_id or auth.uid() = recipient_id) and expires_at > now());
-create policy "users send chat messages" on public.chat_messages for insert with check (auth.uid() = sender_id and auth.uid() <> recipient_id and expires_at <= now() + interval '24 hours' and expires_at > now());
+create policy "chat rooms are visible to members" on public.chat_rooms for select using (public.can_access_chat_room(id));
+create policy "participants read chat messages" on public.chat_messages for select using (
+  expires_at > now() and (
+    (room_id is null and (auth.uid() = sender_id or auth.uid() = recipient_id))
+    or (room_id is not null and public.can_access_chat_room(room_id))
+  )
+);
+create policy "users send chat messages" on public.chat_messages for insert with check (
+  auth.uid() = sender_id
+  and expires_at <= now() + interval '24 hours'
+  and expires_at > now()
+  and (
+    (room_id is null and recipient_id is not null and auth.uid() <> recipient_id)
+    or (room_id is not null and recipient_id is null and public.can_access_chat_room(room_id))
+  )
+);
 create policy "participants delete chat messages" on public.chat_messages for delete using (auth.uid() = sender_id or auth.uid() = recipient_id);
 create policy "users update own profile" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists "admins update user plans" on public.profiles;
