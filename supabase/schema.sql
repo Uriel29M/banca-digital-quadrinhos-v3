@@ -233,8 +233,13 @@ create trigger notify_new_follow_trigger after insert on public.profile_follows 
 create or replace function public.notify_new_chat_message()
 returns trigger language plpgsql security definer set search_path = public
 as $$
+declare
+  v_preview text := regexp_replace(trim(NEW.body), '\s+', ' ', 'g');
 begin
-  perform public.create_notification(NEW.recipient_id, 'message', 'Nova mensagem privada', 'Você recebeu uma nova mensagem privada.', NEW.sender_id, null, '{}'::jsonb);
+  if char_length(v_preview) > 300 then
+    v_preview := left(v_preview, 297) || '...';
+  end if;
+  perform public.create_notification(NEW.recipient_id, 'message', 'Nova mensagem privada', 'Você recebeu uma nova mensagem privada: "' || v_preview || '"', NEW.sender_id, null, '{}'::jsonb);
   return NEW;
 end;
 $$;

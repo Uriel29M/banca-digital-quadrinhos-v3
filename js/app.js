@@ -394,12 +394,36 @@
       ? await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan").in("id", actorIds)
       : { data: [] };
     const actors = new Map((actorsResult.data || []).map(actor => [actor.id, actor]));
-    state.notifications = (result.data || []).map(notification => ({ ...notification, actor: actors.get(notification.actor_id) || null }));
+    state.notifications = (result.data || [])
+      .map(notification => ({ ...notification, actor: actors.get(notification.actor_id) || null }))
+      .filter(notification => !isNotificationFromOpenChat(notification));
     state.notificationUnreadCount = state.notifications.filter(notification => !notification.read_at).length;
-    state.notificationChannel = sb.channel("notifications-" + state.session.user.id).on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: "user_id=eq." + state.session.user.id }, async () => {
+    state.notificationChannel = sb.channel("notifications-" + state.session.user.id).on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: "user_id=eq." + state.session.user.id }, async payload => {
+      if (isNotificationFromOpenChat(payload?.new || {})) {
+        await markChatNotificationsRead(payload.new.actor_id);
+      }
       await loadNotifications();
       render();
     }).subscribe();
+  }
+
+  function isNotificationFromOpenChat(notification) {
+    return Boolean(
+      state.chatContact?.id &&
+      notification.type === "message" &&
+      String(notification.actor_id) === String(state.chatContact.id)
+    );
+  }
+
+  async function markChatNotificationsRead(contactId) {
+    if (!sb || !state.session?.user?.id || !contactId) return;
+    const result = await sb.from("notifications")
+      .update({ read_at: new Date().toISOString() })
+      .eq("user_id", state.session.user.id)
+      .eq("actor_id", contactId)
+      .eq("type", "message")
+      .is("read_at", null);
+    if (result.error) console.warn("NÃ£o foi possÃ­vel marcar as notificaÃ§Ãµes da conversa como lidas:", result.error.message);
   }
 
   async function loadPublicProfile(username, collectionId = null) {
@@ -3054,13 +3078,27 @@
   }
 
   async function openChat(contact = null) {
+    $$('.notifications-popup-modal').forEach(modal => modal.closest('.modal-backdrop')?.remove());
     if (!state.session || !sb) return openAuthPage();
     if (contact?.id === state.session.user.id) return toast("Você não pode enviar mensagens para si mesmo.");
+    state.chatContact = contact?.id ? contact : null;
+    if (contact?.id) {
+      state.notifications = state.notifications.filter(notification => !isNotificationFromOpenChat(notification));
+      state.notificationUnreadCount = state.notifications.filter(notification => !notification.read_at).length;
+    }
+    (contact?.id ? markChatNotificationsRead(contact.id) : Promise.resolve())
+      .then(() => loadNotifications())
+      .then(() => render());
     const overlay = document.createElement("div");
     overlay.className = "modal-backdrop";
     overlay.innerHTML = `<div class="modal chat-modal"><div class="section-head"><div><h2>Mensagens</h2><div class="section-subtitle">As mensagens desaparecem após 24 horas.</div></div><button class="small-btn" data-close>Fechar</button></div><div class="chat-contact-picker">${contact ? `<div class="chat-contact-selected">Conversando com <b>@${escapeHTML(contact.username)}</b></div>` : `<form id="chat-contact-form"><input name="username" required placeholder="Nome de usuário"><button type="submit" class="small-btn">Abrir conversa</button></form>`}</div>${contact ? `<div class="chat-messages" data-chat-messages><div class="empty">Carregando mensagens...</div></div><form class="chat-compose" id="chat-compose"><textarea name="body" maxlength="2000" rows="2" required placeholder="Escreva uma mensagem"></textarea><button type="submit" class="btn btn-danger">Enviar</button></form>` : `<div class="notice">Abra o perfil de um usuário e clique em “Enviar mensagem”, ou pesquise o nome de usuário acima.</div>`}</div>`;
     $("#modal-root").appendChild(overlay);
-    const close = () => { channel?.unsubscribe(); overlay.remove(); };
+    const close = () => {
+      state.chatContact = null;
+      channel?.unsubscribe();
+      overlay.remove();
+      loadNotifications().then(() => render());
+    };
     $("[data-close]", overlay).onclick = close;
     let channel = null;
     if (!contact) {
@@ -3436,13 +3474,22 @@
     return `<div class="content notifications-page"><div class="section-head"><div><div class="eyebrow">Central da conta</div><h1 class="section-title">Notificações</h1><div class="section-subtitle">${state.notificationUnreadCount} não lida(s)</div></div><button class="small-btn" data-mark-all-notifications>Marcar todas como lidas</button></div><div class="notification-list">${state.notifications.map(notification => { const actor = notification.actor; const actorName = actor?.username ? `@${escapeHTML(actor.username)}` : "A Banca Digital"; const actorMarkup = actor?.username ? `<a class="notification-actor" href="${escapeHTML(publicProfileHref(actor.username))}" data-notification-profile="${escapeHTML(actor.username)}">${avatarMarkup(actor, "notification-actor-avatar")}<span><b>${actorName}</b>${actor.title ? `<small style="--title-bg:${safeTitleColor(actor.title_color)}">${escapeHTML(actor.title)}</small>` : ""}</span></a>` : `<span class="notification-system-actor"><span class="notification-icon">${notificationIcon(notification.type)}</span><b>${actorName}</b></span>`; return `<div class="notification-item ${notification.read_at ? "" : "is-unread"}" role="button" tabindex="0" data-notification-open="${escapeHTML(notification.id)}"><span class="notification-icon">${notificationIcon(notification.type)}</span><span class="notification-copy">${actorMarkup}<strong>${escapeHTML(notification.title)}</strong><span>${escapeHTML(notification.body)}</span><small>${escapeHTML(formatCommentDate(notification.created_at))}</small></span></div>`; }).join("") || '<div class="empty">Você ainda não recebeu notificações.</div>'}</div></div>`;
   }
 
+  function closeNotificationsPopups() {
+    $$('.notifications-popup-modal').forEach(modal => modal.closest('.modal-backdrop')?.remove());
+  }
+
   function openNotificationsPopup() {
     if (!state.session) return openAuthPage();
+    closeNotificationsPopups();
     const overlay = document.createElement("div");
     overlay.className = "modal-backdrop";
     overlay.innerHTML = `<div class="modal notifications-popup-modal"><div class="section-head"><div><h2>Notificações</h2><div class="section-subtitle">${state.notificationUnreadCount} não lida(s)</div></div><button class="small-btn" data-close>Fechar</button></div>${renderNotifications()}</div>`;
     $("#modal-root").appendChild(overlay);
-    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $$('[data-close]', overlay).forEach(button => button.onclick = event => {
+      event.preventDefault();
+      event.stopPropagation();
+      overlay.remove();
+    });
     $$('[data-notification-open]', overlay).forEach(button => button.onclick = async event => {
       if (event.target.closest("[data-notification-profile]")) return;
       const notification = state.notifications.find(item => String(item.id) === String(button.dataset.notificationOpen));
@@ -3450,6 +3497,8 @@
       overlay.remove();
       if (notification?.type === "message" && notification.actor?.id) {
         await openChat(notification.actor);
+      } else if (notification?.type === "collection_like" && notification.metadata?.collection_id) {
+        openCollection(String(notification.metadata.collection_id));
       } else {
         openNotificationsPopup();
       }
