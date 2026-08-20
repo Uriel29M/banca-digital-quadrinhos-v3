@@ -196,6 +196,7 @@ drop policy if exists "reading progress is public" on public.reading_progress;
 drop policy if exists "users manage own reading progress" on public.reading_progress;
 drop policy if exists "public collections are visible" on public.shelf_collections;
 drop policy if exists "owners manage collections" on public.shelf_collections;
+drop policy if exists "admins delete public collections" on public.shelf_collections;
 drop policy if exists "collection likes are public" on public.shelf_collection_likes;
 drop policy if exists "users manage collection likes" on public.shelf_collection_likes;
 drop policy if exists "comments are public" on public.comments;
