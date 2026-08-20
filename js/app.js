@@ -10,15 +10,22 @@
   function materializeSeriesItems(items = []) {
     const series = new Map((window.DEFAULT_SERIES || []).map(entry => [entry.id, entry]));
     return items.map(item => {
-      const definition = series.get(item.seriesId);
+      const inferredSeriesId = !item.seriesId && String(item.id || "").startsWith("harley-quinn-2021-")
+        ? "series-harley-quinn-2021"
+        : item.seriesId;
+      const definition = series.get(inferredSeriesId);
       if (!definition) return item;
-      const merged = { ...definition, ...item };
+      const merged = { ...definition, ...item, seriesId: inferredSeriesId };
       SERIES_FIELDS.forEach(field => {
         if (item[field] === undefined || item[field] === null || item[field] === "") merged[field] = definition[field];
       });
       if (merged.id === "teen-titans-academy-anuario") {
         merged.issue = "Anuário";
         merged.sortOrder = 4.5;
+      }
+      if (merged.id === "harley-quinn-2021-annual") {
+        merged.issue = "Anuário";
+        merged.sortOrder = 6.5;
       }
       merged.seriesTitle = item.seriesTitle || definition.name || definition.seriesTitle;
       merged.title = item.title || merged.seriesTitle;
@@ -675,7 +682,7 @@
   function openItem(item) {
     if (!item) return;
     if (!item.seriesId) return openReader(item);
-    const editions = state.db.library.filter(x => x.seriesId === item.seriesId);
+    const editions = seriesEditions(item);
     if (editions.length < 2) return openReader(item);
     openSeriesSelection(item, editions);
   }
