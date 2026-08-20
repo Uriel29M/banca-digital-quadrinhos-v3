@@ -49,7 +49,7 @@ window.DEFAULT_LIBRARY = [
     year: 2015,
     description: "Tomoki é um garoto que parece uma garota. Ele só quer viver uma vida normal no ensino médio, mas sua aparência fofa sempre causa problemas e mal-entendidos.",
     coverUrl: "",
-    fileUrl: "tomoki1207.pdf",
+    fileUrl: "Arquivos/Absolute Batman 001 (2024) 001.cbr",
     telegramUrl: "",
     format: "pdf",
     clicks: 0,
