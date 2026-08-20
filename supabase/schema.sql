@@ -12,6 +12,9 @@ create table if not exists public.profiles (
 
 alter table public.profiles add column if not exists account_email text;
 alter table public.profiles add column if not exists title_color text default '#ffd45c';
+alter table public.profiles add column if not exists shelf_saved_public boolean not null default true;
+alter table public.profiles add column if not exists shelf_read_public boolean not null default true;
+alter table public.profiles add column if not exists shelf_categories jsonb not null default '[]'::jsonb;
 create unique index if not exists profiles_account_email_key on public.profiles(account_email) where account_email is not null;
 
 create table if not exists public.favorites (

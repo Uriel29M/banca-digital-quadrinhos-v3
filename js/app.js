@@ -11,6 +11,8 @@
       try {
         const saved = JSON.parse(localStorage.getItem(DB_KEY));
         if (saved?.library && saved?.collections) {
+          const defaultsById = new Map((window.DEFAULT_LIBRARY || []).map(item => [item.id, item]));
+          saved.library = saved.library.map(item => ({ ...(defaultsById.get(item.id) || {}), ...item }));
           const knownIds = new Set(saved.library.map(item => item.id));
           const newDefaults = structuredClone(window.DEFAULT_LIBRARY).filter(item => !knownIds.has(item.id));
           if (newDefaults.length) {
@@ -50,6 +52,9 @@
     profile: null,
     favoriteIds: new Set(),
     readingProgress: new Map(),
+    shelfSnapshot: null,
+    shelfExpanded: { saved: false, read: false },
+    shelfCategories: [],
     achievementChecks: new Set(),
     achievements: [],
     localBoxFiles: [],
@@ -62,7 +67,6 @@
   const sectionRoutes = {
     home: "",
     comic: "quadrinhos",
-    manga: "mangas",
     collections: "colecoes",
     search: "pesquisar",
     shelf: "estante",
@@ -178,10 +182,12 @@
     if (session?.user) {
       const profile = await sb.from("profiles").select("*").eq("id", session.user.id).single();
       state.profile = profile.data;
+      state.shelfCategories = Array.isArray(profile.data?.shelf_categories) ? profile.data.shelf_categories : [];
       const favorites = await sb.from("favorites").select("item_id").eq("user_id", session.user.id);
       state.favoriteIds = new Set((favorites.data || []).map(row => row.item_id));
       const progress = await sb.from("reading_progress").select("item_id, page, total_pages, completed, updated_at").eq("user_id", session.user.id);
       state.readingProgress = new Map((progress.data || []).map(row => [row.item_id, row]));
+      state.shelfSnapshot = { saved: new Set(state.favoriteIds), read: new Set([...state.readingProgress.entries()].filter(([, row]) => row.completed).map(([id]) => id)) };
       const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", session.user.id);
       state.achievements = (achievements.data || []).map(row => row.achievements).filter(Boolean);
       await sb.rpc("touch_profile");
@@ -223,7 +229,7 @@
     await sb?.auth.signOut();
     clearLocalBox();
     state.localBoxVisible = false;
-    state.session = null; state.profile = null; state.favoriteIds = new Set(); state.readingProgress = new Map(); state.achievements = []; state.achievementChecks = new Set();
+    state.session = null; state.profile = null; state.favoriteIds = new Set(); state.readingProgress = new Map(); state.shelfSnapshot = null; state.shelfCategories = []; state.achievements = []; state.achievementChecks = new Set();
     state.section = "home"; render(); toast("Você saiu da conta.");
   }
 
@@ -254,6 +260,15 @@
     openReader(item, { localObjectUrl: item.fileUrl });
   }
 
+  function ensureShelfSnapshot() {
+    if (!state.shelfSnapshot) state.shelfSnapshot = { saved: new Set(state.favoriteIds), read: new Set([...state.readingProgress.entries()].filter(([, row]) => row.completed).map(([id]) => id)) };
+    return state.shelfSnapshot;
+  }
+
+  function rememberShelfItem(kind, itemId) {
+    ensureShelfSnapshot()[kind].add(itemId);
+  }
+
   async function toggleFavorite(itemId) {
     if (!state.session) return openAuthPage();
     if (state.favoriteIds.has(itemId)) {
@@ -262,6 +277,7 @@
     } else {
       await sb.from("favorites").insert({ user_id: state.session.user.id, item_id: itemId });
       state.favoriteIds.add(itemId);
+      rememberShelfItem("saved", itemId);
       awardAchievement("first_favorite");
     }
     render();
@@ -311,6 +327,7 @@
     const completed = Boolean(current?.completed) || page >= Math.max(1, totalPages - 2);
     const row = { user_id: state.session.user.id, item_id: item.id, page: Math.max(1, Math.min(page, totalPages)), total_pages: totalPages, completed, updated_at: new Date().toISOString() };
     state.readingProgress.set(item.id, row);
+    if (completed) rememberShelfItem("read", item.id);
     $("[data-toggle-read]")?.replaceChildren(document.createTextNode(completed ? "Desmarcar como lida" : "Marcar como lida"));
     updateCompletionCards(item, completed);
     awardAchievement("first_read");
@@ -324,6 +341,7 @@
     const current = progressFor(item);
     const row = { user_id: state.session.user.id, item_id: item.id, page: current?.page || 1, total_pages: totalPages, completed: !current?.completed, updated_at: new Date().toISOString() };
     state.readingProgress.set(item.id, row);
+    if (row.completed) rememberShelfItem("read", item.id);
     updateCompletionCards(item, row.completed);
     const result = sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
     result.then(response => { if (response.error) console.warn("Não foi possível atualizar o status de leitura:", response.error.message); });
@@ -337,7 +355,10 @@
     for (const controller of coverAbortControllers.values()) controller.abort();
     coverAbortControllers.clear();
     coverLoading.clear();
-    $$('[data-cover-id]').forEach(element => { if (!coverMemoryCache.has(element.dataset.coverId)) element.dataset.coverReady = ""; });
+    $$('[data-cover-id]').forEach(element => {
+      const maxWidth = element.classList.contains("hero-bg") || element.classList.contains("hero-cover") ? 1200 : 480;
+      if (!coverMemoryCache.has(`${element.dataset.coverId}:${maxWidth}`)) element.dataset.coverReady = "";
+    });
   }
 
   function setReadingMode(mode) {
@@ -566,7 +587,7 @@
   function openProfileSettings() {
     if (!state.session) return openAuthPage();
     const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
-    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Meu perfil</h2><div class="section-subtitle">Personalize seu @ e sua foto</div></div><button class="small-btn" data-close>Fechar</button></div><form id="profile-form"><div class="form-grid"><div class="field full"><label>@usuário</label><input name="username" pattern="[A-Za-z0-9_]{3,24}" required value="${escapeHTML(state.profile?.username || "")}"></div><div class="field full"><label>Foto de perfil</label><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar perfil</button></div></form></div>`;
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Meu perfil</h2><div class="section-subtitle">Personalize seu @, sua foto e a visibilidade da estante</div></div><button class="small-btn" data-close>Fechar</button></div><form id="profile-form"><div class="form-grid"><div class="field full"><label>@usuário</label><input name="username" pattern="[A-Za-z0-9_]{3,24}" required value="${escapeHTML(state.profile?.username || "")}"></div><div class="field full"><label>Foto de perfil</label><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></div>${["admin", "premium"].includes(state.profile?.plan) ? `<div class="field full"><label>Visibilidade no perfil público</label><label class="checkbox-inline"><input name="shelfSavedPublic" type="checkbox" ${state.profile?.shelf_saved_public !== false ? "checked" : ""}> Mostrar coleção Salvos</label><label class="checkbox-inline"><input name="shelfReadPublic" type="checkbox" ${state.profile?.shelf_read_public !== false ? "checked" : ""}> Mostrar coleção Lidos</label></div>` : ""}</div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar perfil</button></div></form></div>`;
     $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
     const profileForm = $("#profile-form", overlay);
     const emailField = document.createElement("div");
@@ -575,7 +596,7 @@
     emailField.className = "field full profile-email-field";
     emailField.innerHTML = `<label>Email de recuperação <span class="field-optional">(opcional)</span></label><input name="email" type="email" placeholder="voce@email.com" autocomplete="email" value="${hasRecoveryEmail ? escapeHTML(currentEmail) : ""}"><small class="format-hint">Adicionar um email permite recuperar a conta e usá-lo para entrar depois.</small>`;
     $(".form-grid", profileForm).appendChild(emailField);
-    $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const update = await sb.from("profiles").update({ username, avatar_url }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url }; overlay.remove(); render(); toast("Perfil atualizado."); };
+    $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const preferences = ["admin", "premium"].includes(state.profile?.plan) ? { shelf_saved_public: fd.get("shelfSavedPublic") === "on", shelf_read_public: fd.get("shelfReadPublic") === "on" } : {}; const update = await sb.from("profiles").update({ username, avatar_url, ...preferences }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url, ...preferences }; overlay.remove(); render(); toast("Perfil atualizado."); };
     $("#profile-form", overlay).addEventListener("submit", async event => {
       const email = String(new FormData(event.currentTarget).get("email") || "").trim().toLowerCase();
       if (!email) return;
@@ -2057,16 +2078,17 @@
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
   }
 
-  function coverFor(item) {
+  function coverFor(item, variant = "card") {
     // A capa local aparece imediatamente; a capa real substitui-a quando terminar de carregar.
     if (!item) return instantCover({ title: "HQ" });
+    if (variant === "hero" && item.featuredCoverUrl) return item.featuredCoverUrl;
     if (item.coverUrl) return item.coverUrl;
     if (item.cover) return item.cover; // backward compatibility
     return instantCover(item);
   }
 
-  function coverCacheKey(item) {
-    return `banca-cover:${item.id}:${item.fileUrl || item.telegramUrl || ""}`;
+  function coverCacheKey(item, maxWidth) {
+    return `banca-cover:${maxWidth}:${item.id}:${item.fileUrl || item.telegramUrl || ""}`;
   }
 
   function directFileUrl(item) {
@@ -2090,7 +2112,7 @@
     return proxy.toString();
   }
 
-  async function imageBlobToDataUrl(blob, maxWidth = 360) {
+  async function imageBlobToDataUrl(blob, maxWidth = 480) {
     if (!(blob instanceof Blob)) blob = new Blob([blob]);
     const bitmap = await createImageBitmap(blob);
     const scale = Math.min(1, maxWidth / bitmap.width);
@@ -2099,7 +2121,8 @@
     canvas.height = Math.max(1, Math.round(bitmap.height * scale));
     canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
-    return canvas.toDataURL("image/jpeg", 0.72);
+    const webp = canvas.toDataURL("image/webp", 0.86);
+    return webp.startsWith("data:image/webp") ? webp : canvas.toDataURL("image/jpeg", 0.86);
   }
 
   function blobToDataUrl(blob) {
@@ -2112,20 +2135,22 @@
     });
   }
 
-  async function pdfCover(url, signal) {
+  async function pdfCover(url, signal, maxWidth = 480) {
     const response = await fetch(proxiedFileUrl(url), { mode: "cors", credentials: "omit", cache: "no-store", signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(await response.arrayBuffer()) }).promise;
     const page = await pdf.getPage(1);
-    const viewport = page.getViewport({ scale: Math.min(1, 360 / page.getViewport({ scale: 1 }).width) });
+    const baseViewport = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(2, maxWidth / baseViewport.width) });
     const canvas = document.createElement("canvas");
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-    return canvas.toDataURL("image/jpeg", 0.72);
+    const webp = canvas.toDataURL("image/webp", 0.86);
+    return webp.startsWith("data:image/webp") ? webp : canvas.toDataURL("image/jpeg", 0.86);
   }
 
-  async function cbzCover(url, signal) {
+  async function cbzCover(url, signal, maxWidth = 480) {
     const response = await fetch(proxiedFileUrl(url), { mode: "cors", credentials: "omit", cache: "no-store", signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const zip = await JSZip.loadAsync(await response.arrayBuffer());
@@ -2133,10 +2158,10 @@
       .filter(n => !zip.files[n].dir && /\.(jpg|jpeg|png|webp|gif)$/i.test(n))
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))[0];
     if (!name) throw new Error("CBZ sem imagens");
-    return imageBlobToDataUrl(await zip.files[name].async("blob"));
+    return imageBlobToDataUrl(await zip.files[name].async("blob"), maxWidth);
   }
 
-  async function cbrCover(url, signal) {
+  async function cbrCover(url, signal, maxWidth = 480) {
     const response = await fetch(proxiedFileUrl(url), { mode: "cors", credentials: "omit", cache: "no-store", signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const module = await import(appAssetUrl("libarchive/libarchive.js"));
@@ -2156,30 +2181,32 @@
     };
     findImages(files);
     if (!images.length) throw new Error("CBR sem imagens");
-    return imageBlobToDataUrl(await images[0].extract());
+    return imageBlobToDataUrl(await images[0].extract(), maxWidth);
   }
 
-  async function autoCover(item, signal) {
-    if (!item || item.coverUrl || item.cover) return null;
+  async function autoCover(item, signal, maxWidth = 480) {
+    if (!item || item.coverUrl || item.cover || (maxWidth > 480 && item.featuredCoverUrl)) return null;
     const url = directFileUrl(item);
     if (!url) return null;
-    if (coverMemoryCache.has(item.id)) return coverMemoryCache.get(item.id);
-    if (coverLoading.has(item.id)) return coverLoading.get(item.id);
-    const cached = localStorage.getItem(coverCacheKey(item));
-    if (cached && cached.length <= 220000) {
-      coverMemoryCache.set(item.id, cached);
+    const cacheId = `${item.id}:${maxWidth}`;
+    const cacheKey = coverCacheKey(item, maxWidth);
+    if (coverMemoryCache.has(cacheId)) return coverMemoryCache.get(cacheId);
+    if (coverLoading.has(cacheId)) return coverLoading.get(cacheId);
+    const cached = localStorage.getItem(cacheKey);
+    if (cached && cached.length <= (maxWidth > 480 ? 900000 : 300000)) {
+      coverMemoryCache.set(cacheId, cached);
       return cached;
     }
-    if (cached) localStorage.removeItem(coverCacheKey(item));
+    if (cached) localStorage.removeItem(cacheKey);
     const format = (item.format || extension(url)).toLowerCase();
     let cover;
-    if (format === "pdf" || /\.pdf(?:[?#]|$)/i.test(url)) cover = await pdfCover(url, signal);
-    else if (format === "cbz" || /\.cbz(?:[?#]|$)/i.test(url)) cover = await cbzCover(url, signal);
-    else if (format === "cbr" || /\.cbr(?:[?#]|$)/i.test(url)) cover = await cbrCover(url, signal);
+    if (format === "pdf" || /\.pdf(?:[?#]|$)/i.test(url)) cover = await pdfCover(url, signal, maxWidth);
+    else if (format === "cbz" || /\.cbz(?:[?#]|$)/i.test(url)) cover = await cbzCover(url, signal, maxWidth);
+    else if (format === "cbr" || /\.cbr(?:[?#]|$)/i.test(url)) cover = await cbrCover(url, signal, maxWidth);
     else if (/^(jpg|jpeg|png|webp|gif)$/i.test(format)) cover = url;
     if (cover) {
-      coverMemoryCache.set(item.id, cover);
-      try { localStorage.setItem(coverCacheKey(item), cover); } catch {}
+      coverMemoryCache.set(cacheId, cover);
+      try { localStorage.setItem(cacheKey, cover); } catch {}
       return cover;
     }
     return null;
@@ -2194,13 +2221,16 @@
       element.dataset.coverReady = "true";
       const controller = new AbortController();
       coverAbortControllers.set(item.id, controller);
-      const job = autoCover(item, controller.signal);
-      coverLoading.set(item.id, job);
+      const isHero = element.classList.contains("hero-bg") || element.classList.contains("hero-cover");
+      const maxWidth = isHero ? 1200 : 480;
+      const cacheId = `${item.id}:${maxWidth}`;
+      const job = autoCover(item, controller.signal, maxWidth);
+      coverLoading.set(cacheId, job);
       job.then(cover => {
         if (!cover) return;
-        $$('[data-cover-id]').filter(el => el.dataset.coverId === item.id).forEach(el => { el.style.backgroundImage = `url("${cover}")`; });
+        $$('[data-cover-id]').filter(el => el.dataset.coverId === item.id && ((el.classList.contains("hero-bg") || el.classList.contains("hero-cover")) === isHero)).forEach(el => { el.style.backgroundImage = `url("${cover}")`; });
       }).catch(error => { element.dataset.coverReady = ""; console.warn("Não foi possível gerar a capa de", item.title, error); })
-        .finally(() => coverLoading.delete(item.id));
+        .finally(() => coverLoading.delete(cacheId));
     };
     const observer = "IntersectionObserver" in window ? new IntersectionObserver(entries => entries.forEach(entry => { if (entry.isIntersecting) { load(entry.target); observer.unobserve(entry.target); } }), { rootMargin: "500px" }) : null;
     elements.forEach(element => {
@@ -2210,13 +2240,13 @@
     });
   }
 
-  function card(item, progressMap = state.readingProgress) {
+  function card(item, progressMap = state.readingProgress, favoriteIds = state.favoriteIds) {
     const completed = progressFor(item, progressMap)?.completed;
     return `
       <article class="card" data-open="${escapeHTML(item.id)}">
         <div class="cover" data-cover-id="${escapeHTML(item.id)}" style="background-image:url('${escapeHTML(coverFor(item))}')">
           <span class="cover-number">${escapeHTML(item.issue || "")}</span>
-          <button class="card-favorite ${state.favoriteIds.has(item.id) ? 'is-favorite' : ''}" data-favorite="${escapeHTML(item.id)}" title="Salvar na estante">★</button>
+          <button class="card-favorite ${favoriteIds.has(item.id) ? 'is-favorite' : ''}" data-favorite="${escapeHTML(item.id)}" title="Salvar na estante">★</button>
         </div>
         ${completed ? '<div class="card-completed">✓ Concluída</div>' : ''}
         <div class="card-body">
@@ -2248,11 +2278,11 @@
     const mostClicked = uniqueCatalogItems([...lib].sort((a,b) => (b.clicks||0) - (a.clicks||0)).slice(0, 8));
     const randoms = uniqueCatalogItems([...lib].sort(() => Math.random() - .5).slice(0, 8));
     const comics = uniqueCatalogItems(lib.filter(x => x.type === "comic").slice(0, 8));
-    const mangas = uniqueCatalogItems(lib.filter(x => x.type === "manga").slice(0, 8));
 
     return `
       <section class="hero">
-        <div class="hero-bg" data-cover-id="${escapeHTML(heroItem?.id || "")}" style="background-image:url('${escapeHTML(coverFor(heroItem))}')"></div>
+        <div class="hero-bg" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-size="hero" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')"></div>
+        <div class="hero-cover" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-size="hero" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')" aria-hidden="true"></div>
         <div class="hero-content">
           <div class="eyebrow">Destaque da banca</div>
           <h1>${escapeHTML(heroItem?.title || "Sua banca digital")}</h1>
@@ -2266,7 +2296,6 @@
         ${rail("Mais lidos", mostClicked, "As edições que mais receberam cliques.", "Ver catálogo")}
         ${rail("Escolha aleatória", randoms, "Como escolher uma revista numa banca: você nunca sabe o que vai encontrar.")}
         ${rail("Quadrinhos", comics)}
-        ${rail("Mangás", mangas)}
         ${renderCollectionsPreview()}
       </div>`;
   }
@@ -2343,10 +2372,63 @@
     return `<div class="content local-box-page"><div class="section-head"><div><div class="eyebrow">Área privada</div><h1 class="section-title">Minha caixa</h1><div class="section-subtitle">Arquivos locais para ler no navegador</div></div><button class="small-btn" data-section="shelf">Voltar à estante</button></div><div class="notice local-box-notice"><b>Privacidade:</b> os arquivos são armazenados apenas neste navegador, na memória desta sessão. Eles não são enviados para o servidor e desaparecem quando você sair da conta ou fechar a página.</div><div class="local-upload-grid"><label class="local-upload-card"><span class="local-upload-icon">▣</span><strong>Enviar uma pasta</strong><span>Adicione vários quadrinhos de uma vez. Eles aparecerão nesta aba.</span><input id="local-folder-input" type="file" webkitdirectory directory multiple accept=".pdf,.cbz,.cbr,.jpg,.jpeg,.png,.webp,.gif"></label><label class="local-upload-card"><span class="local-upload-icon">＋</span><strong>Enviar um arquivo</strong><span>Abre diretamente no leitor e é descartado ao fechá-lo.</span><input id="local-file-input" type="file" accept=".pdf,.cbz,.cbr,.jpg,.jpeg,.png,.webp,.gif"></label></div><section class="section"><div class="section-head"><div><h2 class="section-title">Arquivos da pasta</h2><div class="section-subtitle">${files.length} arquivo(s) nesta sessão</div></div>${files.length ? '<button class="small-btn" data-action="clear-local-box">Limpar caixa</button>' : ''}</div><div class="results-grid">${files.map(localFileCard).join("") || '<div class="empty">Escolha uma pasta para começar sua leitura local.</div>'}</div></section></div>`;
   }
 
+  const SHELF_PREVIEW_LIMIT = 6;
+
+  function shelfCollectionMarkup(title, items, key, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, actions = "") {
+    const expanded = Boolean(state.shelfExpanded[key]);
+    const visibleItems = expanded ? items : items.slice(0, SHELF_PREVIEW_LIMIT);
+    return `<section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">${escapeHTML(title)}</h2><div class="section-subtitle">${items.length} item(ns)</div></div><div class="shelf-section-actions">${actions}${items.length > SHELF_PREVIEW_LIMIT ? `<button class="small-btn" data-shelf-expand="${escapeHTML(key)}">${expanded ? "Mostrar menos" : "Ver todos"}</button>` : ""}</div></div><div class="results-grid">${visibleItems.map(item => card(item, progressMap, favoriteIds)).join("") || '<div class="empty">Nenhum item nesta coleção.</div>'}</div></section>`;
+  }
+
+  function shelfItemsByIds(ids) {
+    const allowed = new Set(ids);
+    return uniqueCatalogItems(state.db.library.filter(item => allowed.has(item.id)));
+  }
+
+  async function saveShelfPreferences(patch) {
+    state.profile = { ...state.profile, ...patch };
+    if (sb && state.session) {
+      const result = await sb.from("profiles").update(patch).eq("id", state.session.user.id);
+      if (result.error) return toast("Não foi possível salvar a organização da estante.");
+    }
+    render();
+    toast("Estante atualizada.");
+  }
+
+  function openShelfCategoryForm(categoryId = null) {
+    const existing = state.shelfCategories.find(category => category.id === categoryId);
+    const savedItems = shelfItemsByIds([...ensureShelfSnapshot().saved]);
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>${existing ? "Editar subcategoria" : "Nova subcategoria"}</h2><div class="section-subtitle">Organize seus itens salvos</div></div><button class="small-btn" data-close>Fechar</button></div><form id="shelf-category-form"><div class="form-grid"><div class="field full"><label>Nome da subcategoria</label><input name="name" required maxlength="60" value="${escapeHTML(existing?.name || "")}" placeholder="Ex.: Favoritos, Para reler"></div><div class="field full"><label>Quadrinhos nesta subcategoria</label><div class="collection-picker">${savedItems.map(item => `<label><input type="checkbox" name="itemIds" value="${escapeHTML(item.id)}" ${existing?.itemIds?.includes(item.id) ? "checked" : ""}> ${escapeHTML(item.seriesTitle || item.title)}${item.issue ? ` — ${escapeHTML(item.issue)}` : ""}</label>`).join("") || "Salve algum quadrinho primeiro."}</div></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar subcategoria</button></div></form></div>`;
+    $("#modal-root").appendChild(overlay);
+    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $("#shelf-category-form", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const category = { id: existing?.id || `shelf-${Date.now()}`, name: String(form.get("name") || "").trim(), itemIds: form.getAll("itemIds") };
+      if (!category.name) return;
+      const categories = existing ? state.shelfCategories.map(item => item.id === category.id ? category : item) : [...state.shelfCategories, category];
+      state.shelfCategories = categories;
+      overlay.remove();
+      await saveShelfPreferences({ shelf_categories: categories });
+    };
+  }
+
+  function deleteShelfCategory(categoryId) {
+    if (!confirm("Excluir esta subcategoria? Os quadrinhos não serão excluídos da coleção Salvos.")) return;
+    state.shelfCategories = state.shelfCategories.filter(category => category.id !== categoryId);
+    saveShelfPreferences({ shelf_categories: state.shelfCategories });
+  }
+
   function renderShelfPage() {
     if (!state.session) return renderLoginPage();
-    const items = state.db.library.filter(item => state.favoriteIds.has(item.id));
-    return `<div class="content"><div class="profile-header">${avatarMarkup(state.profile)}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || '<div class="empty">Sua estante ainda está vazia. Clique na estrela de uma edição para salvá-la.</div>'}</div></div>`;
+    const snapshot = ensureShelfSnapshot();
+    const savedItems = shelfItemsByIds([...snapshot.saved]);
+    const readItems = shelfItemsByIds([...snapshot.read]);
+    const canCustomize = ["admin", "premium"].includes(state.profile?.plan);
+    const categories = state.shelfCategories.map(category => ({ ...category, itemIds: (category.itemIds || []).filter(id => snapshot.saved.has(id)) }));
+    return `<div class="content"><div class="profile-header">${avatarMarkup(state.profile)}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">Coleções fixas para organizar seus quadrinhos</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div>${shelfCollectionMarkup("Salvos", savedItems, "saved")}${shelfCollectionMarkup("Lidos", readItems, "read")}${canCustomize ? `<section class="section shelf-categories"><div class="section-head"><div><h2 class="section-title">Subcategorias</h2><div class="section-subtitle">Organize os itens da coleção Salvos</div></div><button class="small-btn" data-shelf-new-category>+ Nova subcategoria</button></div>${categories.map(category => shelfCollectionMarkup(category.name, shelfItemsByIds(category.itemIds), `category:${category.id}`, state.readingProgress, state.favoriteIds, `<button class="small-btn" data-shelf-edit-category="${escapeHTML(category.id)}">Editar</button><button class="small-btn danger" data-shelf-delete-category="${escapeHTML(category.id)}">Excluir</button>`)).join("") || '<div class="empty">Crie uma subcategoria para começar a organizar seus salvos.</div>'}</section>` : ""}</div>`;
   }
 
   function renderPublicProfilePage() {
@@ -2354,7 +2436,10 @@
     if (!publicState || publicState.loading) return '<div class="content"><div class="empty">Carregando perfil...</div></div>';
     if (publicState.error) return `<div class="content"><div class="empty">${escapeHTML(publicState.error)}</div></div>`;
     const profile = publicState.profile;
-    const items = state.db.library.filter(item => publicState.favoriteIds.has(item.id));
+    const savedVisible = !["admin", "premium"].includes(profile.plan) || profile.shelf_saved_public !== false;
+    const readVisible = !["admin", "premium"].includes(profile.plan) || profile.shelf_read_public !== false;
+    const savedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.favoriteIds.has(item.id)));
+    const readItems = uniqueCatalogItems(state.db.library.filter(item => publicState.readingProgress.get(item.id)?.completed));
     return `<div class="content public-profile-page">
       <div class="profile-header">
         ${avatarMarkup(profile)}
@@ -2364,8 +2449,9 @@
           ${trophyRoom(publicState.achievements)}
         </div>
       </div>
-      <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">${items.length} item(ns) salvo(s)</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div>
-      <div class="results-grid">${uniqueCatalogItems(items).map(item => card(item, publicState.readingProgress)).join("") || '<div class="empty">Esta estante ainda está vazia.</div>'}</div>
+      <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">Coleções públicas do perfil</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div>
+      ${savedVisible ? shelfCollectionMarkup("Salvos", savedItems, "public-saved", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Salvos está oculta neste perfil.</div>'}
+      ${readVisible ? shelfCollectionMarkup("Lidos", readItems, "public-read", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Lidos está oculta neste perfil.</div>'}
     </div>`;
   }
 
@@ -2385,10 +2471,38 @@
 
   function renderSearch() {
     const q = state.search.trim().toLowerCase();
-    const results = state.db.library.filter(x => {
-      const hay = [x.title,x.seriesTitle,x.issue,x.author,x.publisher,x.character,x.description,...(x.tags||[])].join(" ").toLowerCase();
+    const results = uniqueCatalogItems(state.db.library.filter(x => {
+      const hay = [x.title,x.seriesTitle,x.issue,x.author,x.publisher,x.imprint,x.character,x.description,...(x.tags||[])].join(" ").toLowerCase();
       return !q || hay.includes(q);
+    }));
+    const initialOrder = ["0-9", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""), "#"];
+    const initialFor = item => {
+      const initial = String(item.seriesTitle || item.title || "").trim().charAt(0).toUpperCase();
+      return /[0-9]/.test(initial) ? "0-9" : /^[A-Z]$/.test(initial) ? initial : "#";
+    };
+    const grouped = new Map();
+    results.forEach(item => {
+      const publisher = String(item.publisher || "Sem editora").trim() || "Sem editora";
+      const imprint = String(item.imprint || "Sem selo").trim() || "Sem selo";
+      if (!grouped.has(publisher)) grouped.set(publisher, new Map());
+      if (!grouped.get(publisher).has(imprint)) grouped.get(publisher).set(imprint, new Map());
+      const initial = initialFor(item);
+      if (!grouped.get(publisher).get(imprint).has(initial)) grouped.get(publisher).get(imprint).set(initial, []);
+      grouped.get(publisher).get(imprint).get(initial).push(item);
     });
+    const publisherMarkup = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, "pt-BR")).map(([publisher, imprints]) => `
+      <section class="section search-publisher">
+        <div class="section-head"><div><h2 class="section-title">${escapeHTML(publisher)}</h2><div class="section-subtitle">Editora</div></div></div>
+        ${[...imprints.entries()].sort(([a], [b]) => a.localeCompare(b, "pt-BR")).map(([imprint, initials]) => `
+          <section class="search-imprint">
+            <div class="section-head"><div><h3 class="section-title">${escapeHTML(imprint)}</h3><div class="section-subtitle">Selo</div></div></div>
+            ${initialOrder.filter(initial => initials.has(initial)).map(initial => `
+              <section class="search-initial">
+                <h4 class="search-initial-title">${initial}</h4>
+                <div class="results-grid">${initials.get(initial).sort((a, b) => (a.seriesTitle || a.title).localeCompare(b.seriesTitle || b.title, "pt-BR")).map(item => card(item)).join("")}</div>
+              </section>`).join("")}
+          </section>`).join("")}
+      </section>`).join("");
     return `
       <div class="content">
         <div class="section">
@@ -2398,7 +2512,7 @@
             <button class="btn btn-danger" data-action="do-search">Pesquisar</button>
           </div>
           <div class="section-subtitle">${results.length} resultado(s)</div>
-          <div class="results-grid" style="margin-top:15px">${uniqueCatalogItems(results).map(item => card(item)).join("") || `<div class="empty">Nada encontrado.</div>`}</div>
+          <div style="margin-top:15px">${publisherMarkup || `<div class="empty">Nada encontrado.</div>`}</div>
         </div>
       </div>`;
   }
@@ -2473,6 +2587,10 @@
     $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
     $$('.local-box-nav').forEach(button => { button.style.display = state.session && state.localBoxVisible ? "" : "none"; });
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
+    $$('[data-shelf-expand]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); state.shelfExpanded[el.dataset.shelfExpand] = !state.shelfExpanded[el.dataset.shelfExpand]; render(); }));
+    $('[data-shelf-new-category]')?.addEventListener("click", () => openShelfCategoryForm());
+    $$('[data-shelf-edit-category]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openShelfCategoryForm(el.dataset.shelfEditCategory); }));
+    $$('[data-shelf-delete-category]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); deleteShelfCategory(el.dataset.shelfDeleteCategory); }));
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
       const item = state.db.library.find(x => x.id === el.dataset.open);
       openItem(item);
@@ -2846,8 +2964,8 @@
           <button class="btn btn-danger" data-new>+ Nova edição</button><button class="small-btn" data-new-collection>+ Criar coleção</button><button class="small-btn" data-achievements>Títulos</button><button class="small-btn" data-account-plan>Tipo de conta</button>
           <button class="small-btn" data-export>Exportar</button><button class="small-btn" data-import>Importar</button><button class="small-btn" data-reset>Restaurar exemplo</button>
         </div>
-        <table class="admin-table"><thead><tr><th>Série / edição</th><th>Editora</th><th>Personagem</th><th>Ano</th><th>Ações</th></tr></thead><tbody>
-          ${state.db.library.map(x => `<tr><td><b>${escapeHTML(x.seriesTitle || x.title)}</b><br><span style="color:#777">${escapeHTML(x.issue || (x.seriesId ? "Edição" : "Oneshot"))}</span></td><td>${escapeHTML(x.publisher || "—")}</td><td>${escapeHTML(x.character || "—")}</td><td>${escapeHTML(String(x.year || "—"))}</td><td><div class="admin-actions"><button class="small-btn" data-edit="${escapeHTML(x.id)}">Editar</button><button class="small-btn danger" data-delete="${escapeHTML(x.id)}">Excluir</button></div></td></tr>`).join("")}
+        <table class="admin-table"><thead><tr><th>Série / edição</th><th>Editora</th><th>Selo</th><th>Personagem</th><th>Ano</th><th>Ações</th></tr></thead><tbody>
+          ${state.db.library.map(x => `<tr><td><b>${escapeHTML(x.seriesTitle || x.title)}</b><br><span style="color:#777">${escapeHTML(x.issue || (x.seriesId ? "Edição" : "Oneshot"))}</span></td><td>${escapeHTML(x.publisher || "—")}</td><td>${escapeHTML(x.imprint || "—")}</td><td>${escapeHTML(x.character || "—")}</td><td>${escapeHTML(String(x.year || "—"))}</td><td><div class="admin-actions"><button class="small-btn" data-edit="${escapeHTML(x.id)}">Editar</button><button class="small-btn danger" data-delete="${escapeHTML(x.id)}">Excluir</button></div></td></tr>`).join("")}
         </tbody></table>
         <h3 style="margin-top:28px">Coleções</h3>
         <div class="admin-collection-list">${state.db.collections.map(c => `<div><b>${escapeHTML(c.title)}</b><span>${c.issueIds.length} edições</span><button class="small-btn danger" data-delete-collection="${escapeHTML(c.id)}">Excluir</button></div>`).join("") || "Nenhuma coleção criada."}</div>
@@ -2868,7 +2986,7 @@
 
   function openEditForm(id = null) {
     const old = id ? state.db.library.find(x => x.id === id) : null;
-    const x = old || { id: "item-" + Date.now(), title: "", seriesTitle: "", issue: "", type: "comic", author: "", publisher: "", character: "", year: new Date().getFullYear(), description: "", fileUrl: "", telegramUrl: "", format: "auto", clicks: 0, featured: false, tags: [], collectionIds: [] };
+    const x = old || { id: "item-" + Date.now(), title: "", seriesTitle: "", issue: "", type: "comic", author: "", publisher: "", imprint: "", character: "", year: new Date().getFullYear(), description: "", fileUrl: "", telegramUrl: "", featuredCoverUrl: "", format: "auto", clicks: 0, featured: false, tags: [], collectionIds: [] };
     const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
     overlay.innerHTML = `
       <div class="modal"><div class="section-head"><div><h2>${id ? "Editar edição" : "Nova edição"}</h2><div class="section-subtitle">A capa será extraída da primeira página</div></div><button class="small-btn" data-close>Fechar</button></div>
@@ -2877,8 +2995,9 @@
           <div class="field full"><label>Série (deixe vazio para oneshot)</label><input name="seriesTitle" value="${escapeHTML(x.seriesTitle || "")}" placeholder="Ex.: Homem-Aranha, Universo Casulo"></div>
           <div class="field"><label>Número da edição / volume</label><input name="volume" type="number" min="1" step="1" inputmode="numeric" value="${escapeHTML(String(x.issue || "").match(/\d+/)?.[0] || "")}" placeholder="Ex.: 1"><label class="checkbox-inline"><input name="oneShot" type="checkbox" ${!x.seriesId && !x.issue ? "checked" : ""}> Volume único</label></div>
           <div class="field"><label>Tipo</label><select name="type"><option value="comic" ${x.type === "comic" ? "selected" : ""}>Quadrinho</option><option value="manga" ${x.type === "manga" ? "selected" : ""}>Mangá</option></select></div>
-          <div class="field"><label>Ano</label><input name="year" type="number" value="${escapeHTML(x.year || "")}"></div><div class="field"><label>Editora</label><input name="publisher" value="${escapeHTML(x.publisher || "")}"></div><div class="field"><label>Personagem principal</label><input name="character" value="${escapeHTML(x.character || "")}"></div><div class="field"><label>Autor</label><input name="author" value="${escapeHTML(x.author || "")}"></div>
+          <div class="field"><label>Ano</label><input name="year" type="number" value="${escapeHTML(x.year || "")}"></div><div class="field"><label>Editora</label><input name="publisher" value="${escapeHTML(x.publisher || "")}"></div><div class="field"><label>Selo</label><input name="imprint" value="${escapeHTML(x.imprint || "")}" placeholder="Ex.: Vertigo, Marvel, Turma da Mônica"></div><div class="field"><label>Personagem principal</label><input name="character" value="${escapeHTML(x.character || "")}"></div><div class="field"><label>Autor</label><input name="author" value="${escapeHTML(x.author || "")}"></div>
           <div class="field full"><label>Link direto do arquivo</label><input name="sourceUrl" required value="${escapeHTML(x.telegramUrl || x.fileUrl || "")}" placeholder="arquivo.pdf, arquivo.cbz, arquivo.cbr..."><small class="format-hint">Formato detectado: <b data-format-preview>${escapeHTML(x.format || "auto")}</b></small></div>
+          <div class="field full"><label>Imagem exclusiva do destaque (opcional)</label><input name="featuredCoverUrl" type="url" value="${escapeHTML(x.featuredCoverUrl || "")}" placeholder="https://.../capa-do-destaque.jpg"><small class="format-hint">Use uma imagem horizontal ou uma capa em alta resolução para controlar melhor o destaque.</small></div>
           <div class="field full"><label>Descrição</label><textarea name="description">${escapeHTML(x.description || "")}</textarea></div><div class="field full"><label>Tags</label><input name="tags" value="${escapeHTML((x.tags || []).join(", "))}"></div><div class="field full"><label><input name="featured" type="checkbox" ${x.featured ? "checked" : ""}> Mostrar como destaque</label></div>
         </div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar edição</button></div></form>
       </div>`;
@@ -2887,7 +3006,7 @@
     const syncOneShot = () => { volume.disabled = oneShot.checked; if (oneShot.checked) volume.value = ""; };
     oneShot.addEventListener("change", syncOneShot); syncOneShot();
     source.addEventListener("input", () => preview.textContent = detectFormat(source.value));
-    $("#edit-form", overlay).onsubmit = event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const sourceUrl = String(fd.get("sourceUrl") || "").trim(); const seriesTitle = fd.get("oneShot") === "on" ? "" : String(fd.get("seriesTitle") || "").trim(); const volumeNumber = fd.get("oneShot") === "on" ? "" : String(fd.get("volume") || "").replace(/\D/g, ""); const item = { ...x, title: String(fd.get("title") || "").trim(), seriesTitle, seriesId: seriesTitle ? seriesKey(seriesTitle) : "", issue: volumeNumber, type: fd.get("type"), year: Number(fd.get("year")) || new Date().getFullYear(), publisher: String(fd.get("publisher") || "").trim(), character: String(fd.get("character") || "").trim(), author: String(fd.get("author") || "").trim(), format: detectFormat(sourceUrl), fileUrl: sourceUrl, telegramUrl: "", description: String(fd.get("description") || "").trim(), tags: String(fd.get("tags") || "").split(",").map(s => s.trim()).filter(Boolean), featured: fd.get("featured") === "on" }; delete item.randomWeight; const index = state.db.library.findIndex(i => i.id === item.id); if (index >= 0) state.db.library[index] = item; else state.db.library.push(item); saveCatalog("Edição salva."); overlay.remove(); render(); };
+    $("#edit-form", overlay).onsubmit = event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const sourceUrl = String(fd.get("sourceUrl") || "").trim(); const seriesTitle = fd.get("oneShot") === "on" ? "" : String(fd.get("seriesTitle") || "").trim(); const volumeNumber = fd.get("oneShot") === "on" ? "" : String(fd.get("volume") || "").replace(/\D/g, ""); const item = { ...x, title: String(fd.get("title") || "").trim(), seriesTitle, seriesId: seriesTitle ? seriesKey(seriesTitle) : "", issue: volumeNumber, type: fd.get("type"), year: Number(fd.get("year")) || new Date().getFullYear(), publisher: String(fd.get("publisher") || "").trim(), imprint: String(fd.get("imprint") || "").trim(), character: String(fd.get("character") || "").trim(), author: String(fd.get("author") || "").trim(), format: detectFormat(sourceUrl), fileUrl: sourceUrl, telegramUrl: "", featuredCoverUrl: String(fd.get("featuredCoverUrl") || "").trim(), description: String(fd.get("description") || "").trim(), tags: String(fd.get("tags") || "").split(",").map(s => s.trim()).filter(Boolean), featured: fd.get("featured") === "on" }; delete item.randomWeight; const index = state.db.library.findIndex(i => i.id === item.id); if (index >= 0) state.db.library[index] = item; else state.db.library.push(item); saveCatalog("Edição salva."); overlay.remove(); render(); };
   }
 
   function renderCatalog(type = null) {
@@ -2902,10 +3021,10 @@
   function openSubmission() {
     const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
     overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Enviar uma edição</h2><div class="section-subtitle">Ajude a ampliar o catálogo da banca</div></div><button class="small-btn" data-close>Fechar</button></div><form id="submission-form"><div class="form-grid">
-      <div class="field"><label>Seu nome</label><input name="author" required></div><div class="field"><label>Nome da série (opcional)</label><input name="seriesTitle" placeholder="Vazio = oneshot"></div><div class="field"><label>Título da edição</label><input name="title" required></div><div class="field"><label>Edição / volume</label><input name="issue"></div><div class="field"><label>Tipo</label><select name="type"><option value="comic">Quadrinho</option><option value="manga">Mangá</option></select></div><div class="field"><label>Ano</label><input name="year" type="number"></div><div class="field"><label>Editora</label><input name="publisher"></div><div class="field"><label>Personagem</label><input name="character"></div><div class="field full"><label>Link direto do arquivo</label><input name="sourceUrl" required placeholder="arquivo.pdf, arquivo.cbz ou arquivo.cbr"></div><div class="field full"><label>Mensagem</label><textarea name="message" placeholder="Observações sobre esta edição"></textarea></div>
+      <div class="field"><label>Seu nome</label><input name="author" required></div><div class="field"><label>Nome da série (opcional)</label><input name="seriesTitle" placeholder="Vazio = oneshot"></div><div class="field"><label>Título da edição</label><input name="title" required></div><div class="field"><label>Edição / volume</label><input name="issue"></div><div class="field"><label>Tipo</label><select name="type"><option value="comic">Quadrinho</option><option value="manga">Mangá</option></select></div><div class="field"><label>Ano</label><input name="year" type="number"></div><div class="field"><label>Editora</label><input name="publisher"></div><div class="field"><label>Selo</label><input name="imprint" placeholder="Ex.: Vertigo, Marvel, Turma da Mônica"></div><div class="field"><label>Personagem</label><input name="character"></div><div class="field full"><label>Link direto do arquivo</label><input name="sourceUrl" required placeholder="arquivo.pdf, arquivo.cbz ou arquivo.cbr"></div><div class="field full"><label>Mensagem</label><textarea name="message" placeholder="Observações sobre esta edição"></textarea></div>
     </div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Enviar para análise</button></div></form></div>`;
     $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
-    $("#submission-form", overlay).onsubmit = event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const seriesTitle = String(fd.get("seriesTitle") || "").trim(); state.db.submissions.push({ id: "sub-" + Date.now(), author: String(fd.get("author") || "").trim(), seriesTitle, seriesId: seriesTitle ? seriesKey(seriesTitle) : "", title: String(fd.get("title") || "").trim(), issue: String(fd.get("issue") || "").trim(), type: fd.get("type"), year: Number(fd.get("year")) || "", publisher: String(fd.get("publisher") || "").trim(), character: String(fd.get("character") || "").trim(), fileUrl: String(fd.get("sourceUrl") || "").trim(), format: detectFormat(fd.get("sourceUrl") || ""), message: String(fd.get("message") || ""), createdAt: new Date().toISOString() }); save(); overlay.remove(); toast("Envio registrado para análise."); };
+    $("#submission-form", overlay).onsubmit = event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const seriesTitle = String(fd.get("seriesTitle") || "").trim(); state.db.submissions.push({ id: "sub-" + Date.now(), author: String(fd.get("author") || "").trim(), seriesTitle, seriesId: seriesTitle ? seriesKey(seriesTitle) : "", title: String(fd.get("title") || "").trim(), issue: String(fd.get("issue") || "").trim(), type: fd.get("type"), year: Number(fd.get("year")) || "", publisher: String(fd.get("publisher") || "").trim(), imprint: String(fd.get("imprint") || "").trim(), character: String(fd.get("character") || "").trim(), fileUrl: String(fd.get("sourceUrl") || "").trim(), format: detectFormat(fd.get("sourceUrl") || ""), message: String(fd.get("message") || ""), createdAt: new Date().toISOString() }); save(); overlay.remove(); toast("Envio registrado para análise."); };
   }
 
   window.addEventListener("popstate", applyRoute);
