@@ -164,7 +164,6 @@
     home: "",
     comic: "quadrinhos",
     collections: "colecoes",
-    notifications: "notificacoes",
     search: "pesquisar",
     shelf: "estante",
     "local-box": "caixa",
@@ -390,7 +389,12 @@
       state.notificationUnreadCount = 0;
       return;
     }
-    state.notifications = result.data || [];
+    const actorIds = [...new Set((result.data || []).map(notification => notification.actor_id).filter(Boolean))];
+    const actorsResult = actorIds.length
+      ? await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan").in("id", actorIds)
+      : { data: [] };
+    const actors = new Map((actorsResult.data || []).map(actor => [actor.id, actor]));
+    state.notifications = (result.data || []).map(notification => ({ ...notification, actor: actors.get(notification.actor_id) || null }));
     state.notificationUnreadCount = state.notifications.filter(notification => !notification.read_at).length;
     state.notificationChannel = sb.channel("notifications-" + state.session.user.id).on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: "user_id=eq." + state.session.user.id }, async () => {
       await loadNotifications();
@@ -3429,7 +3433,40 @@
 
   function renderNotifications() {
     if (!state.session) return renderLoginPage();
-    return `<div class="content notifications-page"><div class="section-head"><div><div class="eyebrow">Central da conta</div><h1 class="section-title">Notificações</h1><div class="section-subtitle">${state.notificationUnreadCount} não lida(s)</div></div><button class="small-btn" data-mark-all-notifications>Marcar todas como lidas</button></div><div class="notification-list">${state.notifications.map(notification => `<button class="notification-item ${notification.read_at ? "" : "is-unread"}" type="button" data-notification-open="${escapeHTML(notification.id)}"><span class="notification-icon">${notificationIcon(notification.type)}</span><span class="notification-copy"><strong>${escapeHTML(notification.title)}</strong><span>${escapeHTML(notification.body)}</span><small>${escapeHTML(formatCommentDate(notification.created_at))}</small></span></button>`).join("") || '<div class="empty">Você ainda não recebeu notificações.</div>'}</div></div>`;
+    return `<div class="content notifications-page"><div class="section-head"><div><div class="eyebrow">Central da conta</div><h1 class="section-title">Notificações</h1><div class="section-subtitle">${state.notificationUnreadCount} não lida(s)</div></div><button class="small-btn" data-mark-all-notifications>Marcar todas como lidas</button></div><div class="notification-list">${state.notifications.map(notification => { const actor = notification.actor; const actorName = actor?.username ? `@${escapeHTML(actor.username)}` : "A Banca Digital"; const actorMarkup = actor?.username ? `<a class="notification-actor" href="${escapeHTML(publicProfileHref(actor.username))}" data-notification-profile="${escapeHTML(actor.username)}">${avatarMarkup(actor, "notification-actor-avatar")}<span><b>${actorName}</b>${actor.title ? `<small style="--title-bg:${safeTitleColor(actor.title_color)}">${escapeHTML(actor.title)}</small>` : ""}</span></a>` : `<span class="notification-system-actor"><span class="notification-icon">${notificationIcon(notification.type)}</span><b>${actorName}</b></span>`; return `<div class="notification-item ${notification.read_at ? "" : "is-unread"}" role="button" tabindex="0" data-notification-open="${escapeHTML(notification.id)}"><span class="notification-icon">${notificationIcon(notification.type)}</span><span class="notification-copy">${actorMarkup}<strong>${escapeHTML(notification.title)}</strong><span>${escapeHTML(notification.body)}</span><small>${escapeHTML(formatCommentDate(notification.created_at))}</small></span></div>`; }).join("") || '<div class="empty">Você ainda não recebeu notificações.</div>'}</div></div>`;
+  }
+
+  function openNotificationsPopup() {
+    if (!state.session) return openAuthPage();
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal notifications-popup-modal"><div class="section-head"><div><h2>Notificações</h2><div class="section-subtitle">${state.notificationUnreadCount} não lida(s)</div></div><button class="small-btn" data-close>Fechar</button></div>${renderNotifications()}</div>`;
+    $("#modal-root").appendChild(overlay);
+    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $$('[data-notification-open]', overlay).forEach(button => button.onclick = async event => {
+      if (event.target.closest("[data-notification-profile]")) return;
+      const notification = state.notifications.find(item => String(item.id) === String(button.dataset.notificationOpen));
+      await markNotificationRead(notification?.id);
+      overlay.remove();
+      if (notification?.type === "message" && notification.actor?.id) {
+        await openChat(notification.actor);
+      } else {
+        openNotificationsPopup();
+      }
+    });
+    $$('[data-notification-profile]', overlay).forEach(link => link.onclick = async event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const notification = state.notifications.find(item => String(item.id) === String(link.closest("[data-notification-open]")?.dataset.notificationOpen));
+      await markNotificationRead(notification?.id);
+      overlay.remove();
+      await loadPublicProfile(link.dataset.notificationProfile);
+    });
+    $('[data-mark-all-notifications]', overlay)?.addEventListener("click", async () => {
+      await markAllNotificationsRead();
+      overlay.remove();
+      openNotificationsPopup();
+    });
   }
 
   function render() {
@@ -3445,7 +3482,6 @@
     else if (state.section === "login") markup = renderLoginPage();
     else if (state.section === "signup") markup = renderSignupPage();
     else if (state.section === "shelf") markup = renderShelfPage();
-    else if (state.section === "notifications") markup = renderNotifications();
     else if (state.section === "local-box") markup = renderLocalBoxPage();
     else if (state.section === "public-profile") markup = renderPublicProfilePage();
     else if (state.section === "password-reset") markup = renderPasswordResetPage();
@@ -3537,9 +3573,13 @@
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
     $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
     $$('.messages-nav').forEach(button => { button.style.display = state.session ? "" : "none"; });
-    $$('.notifications-nav').forEach(button => {
+    $$('.notification-bell').forEach(button => {
       button.style.display = state.session ? "" : "none";
-      button.textContent = state.notificationUnreadCount ? "Notificações (" + state.notificationUnreadCount + ")" : "Notificações";
+      const badge = $(".notification-badge", button);
+      if (badge) {
+        badge.textContent = state.notificationUnreadCount > 99 ? "99+" : String(state.notificationUnreadCount);
+        badge.hidden = !state.notificationUnreadCount;
+      }
     });
     $$('.local-box-nav').forEach(button => { button.style.display = state.session && state.localBoxVisible ? "" : "none"; });
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
@@ -3621,6 +3661,7 @@
       if (a === "open-admin") { if (canManage) openAdmin(); }
       if (a === "open-auth") state.session ? setSection("shelf") : openAuthPage();
       if (a === "messages") openChat();
+      if (a === "notifications-popup") openNotificationsPopup();
       if (a === "logout") signOut();
       if (a === "profile") openProfileSettings();
       if (a === "submit") { if (isAdmin) openSubmission(); else toast("O envio de quadrinhos é exclusivo para administradores."); }
