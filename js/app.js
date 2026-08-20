@@ -55,6 +55,7 @@
     shelfSnapshot: null,
     shelfExpanded: { saved: false, read: false },
     shelfCategories: [],
+    collectionFilter: { field: "all", query: "" },
     achievementChecks: new Set(),
     achievements: [],
     localBoxFiles: [],
@@ -167,11 +168,12 @@
     return new URL(String(path).replace(/^\/+/, ""), document.baseURI).href;
   }
 
-  function publicProfileHref(username) {
+  function publicProfileHref(username, collectionId = "") {
     const url = new URL(window.location.href);
     url.search = "";
     url.hash = "";
     url.searchParams.set("perfil", cleanUsername(username));
+    if (collectionId) url.searchParams.set("lista", collectionId);
     return `${url.pathname}?${url.searchParams.toString()}`;
   }
 
@@ -182,7 +184,8 @@
     if (session?.user) {
       const profile = await sb.from("profiles").select("*").eq("id", session.user.id).single();
       state.profile = profile.data;
-      state.shelfCategories = Array.isArray(profile.data?.shelf_categories) ? profile.data.shelf_categories : [];
+      const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids").eq("owner_id", session.user.id).order("created_at", { ascending: true });
+      state.shelfCategories = (collections.data || []).map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, itemIds: Array.isArray(collection.item_ids) ? collection.item_ids : [] }));
       const favorites = await sb.from("favorites").select("item_id").eq("user_id", session.user.id);
       state.favoriteIds = new Set((favorites.data || []).map(row => row.item_id));
       const progress = await sb.from("reading_progress").select("item_id, page, total_pages, completed, updated_at").eq("user_id", session.user.id);
@@ -195,8 +198,9 @@
     render();
   }
 
-  async function loadPublicProfile(username) {
-    state.publicProfile = { loading: true, username };
+  async function loadPublicProfile(username, collectionId = null) {
+    state.publicProfile = { loading: true, username, collectionId };
+    state.collectionFilter = { field: "all", query: "" };
     state.section = "public-profile";
     render();
     if (!sb) {
@@ -204,7 +208,7 @@
       render();
       return;
     }
-    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan").ilike("username", username).maybeSingle();
+    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_read_public").ilike("username", username).maybeSingle();
     if (profile.error) {
       profile = await sb.from("profiles").select("id, username, avatar_url, title, plan").ilike("username", username).maybeSingle();
     }
@@ -215,12 +219,20 @@
     }
     const favorites = await sb.from("favorites").select("item_id").eq("user_id", profile.data.id);
     const progress = await sb.from("reading_progress").select("item_id, page, total_pages, completed, updated_at").eq("user_id", profile.data.id);
+    const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids").eq("owner_id", profile.data.id).order("created_at", { ascending: true });
     const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", profile.data.id);
+    const likes = await sb.from("shelf_collection_likes").select("collection_id, user_id").eq("owner_id", profile.data.id);
+    const collectionLikes = new Set((likes.data || []).filter(row => row.user_id === state.session?.user?.id).map(row => row.collection_id));
+    const collectionLikeCounts = (likes.data || []).reduce((counts, row) => counts.set(row.collection_id, (counts.get(row.collection_id) || 0) + 1), new Map());
     state.publicProfile = {
       profile: profile.data,
+      collectionId,
+      collections: (collections.data || []).map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, itemIds: Array.isArray(collection.item_ids) ? collection.item_ids : [] })),
       favoriteIds: new Set((favorites.data || []).map(row => row.item_id)),
       readingProgress: new Map((progress.data || []).map(row => [row.item_id, row])),
-      achievements: (achievements.data || []).map(row => row.achievements).filter(Boolean)
+      achievements: (achievements.data || []).map(row => row.achievements).filter(Boolean),
+      collectionLikes,
+      collectionLikeCounts
     };
     render();
   }
@@ -2385,14 +2397,29 @@
     return uniqueCatalogItems(state.db.library.filter(item => allowed.has(item.id)));
   }
 
-  async function saveShelfPreferences(patch) {
-    state.profile = { ...state.profile, ...patch };
+  async function saveShelfCategories(categories) {
     if (sb && state.session) {
-      const result = await sb.from("profiles").update(patch).eq("id", state.session.user.id);
+      const rows = categories.map(category => ({ id: category.id, owner_id: state.session.user.id, name: category.name, cover_url: category.coverUrl || null, is_public: category.isPublic !== false, item_ids: category.itemIds || [] }));
+      const result = rows.length ? await sb.from("shelf_collections").upsert(rows, { onConflict: "id" }) : { error: null };
       if (result.error) return toast("Não foi possível salvar a organização da estante.");
+      const ids = rows.map(row => row.id);
+      const existing = await sb.from("shelf_collections").select("id").eq("owner_id", state.session.user.id);
+      const removedIds = (existing.data || []).map(row => row.id).filter(id => !ids.includes(id));
+      if (removedIds.length) await sb.from("shelf_collections").delete().eq("owner_id", state.session.user.id).in("id", removedIds);
     }
     render();
     toast("Estante atualizada.");
+  }
+
+  async function copyCollectionLink(categoryId, username = state.profile?.username) {
+    if (!username || !categoryId) return;
+    const link = new URL(publicProfileHref(username, categoryId), window.location.href).href;
+    try {
+      await navigator.clipboard.writeText(link);
+      toast("Link da coleção copiado.");
+    } catch {
+      window.prompt("Copie o link da coleção:", link);
+    }
   }
 
   function openShelfCategoryForm(categoryId = null) {
@@ -2400,25 +2427,25 @@
     const savedItems = shelfItemsByIds([...ensureShelfSnapshot().saved]);
     const overlay = document.createElement("div");
     overlay.className = "modal-backdrop";
-    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>${existing ? "Editar subcategoria" : "Nova subcategoria"}</h2><div class="section-subtitle">Organize seus itens salvos</div></div><button class="small-btn" data-close>Fechar</button></div><form id="shelf-category-form"><div class="form-grid"><div class="field full"><label>Nome da subcategoria</label><input name="name" required maxlength="60" value="${escapeHTML(existing?.name || "")}" placeholder="Ex.: Favoritos, Para reler"></div><div class="field full"><label>Quadrinhos nesta subcategoria</label><div class="collection-picker">${savedItems.map(item => `<label><input type="checkbox" name="itemIds" value="${escapeHTML(item.id)}" ${existing?.itemIds?.includes(item.id) ? "checked" : ""}> ${escapeHTML(item.seriesTitle || item.title)}${item.issue ? ` — ${escapeHTML(item.issue)}` : ""}</label>`).join("") || "Salve algum quadrinho primeiro."}</div></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar subcategoria</button></div></form></div>`;
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>${existing ? "Editar coleção" : "Nova coleção"}</h2><div class="section-subtitle">Organize seus itens salvos e escolha se a coleção será compartilhável</div></div><button class="small-btn" data-close>Fechar</button></div><form id="shelf-category-form"><div class="form-grid"><div class="field full"><label>Nome da coleção</label><input name="name" required maxlength="60" value="${escapeHTML(existing?.name || "")}" placeholder="Ex.: Favoritos, Para reler"></div><div class="field full"><label>Imagem da coleção (opcional)</label><input name="coverUrl" type="url" value="${escapeHTML(existing?.coverUrl || "")}" placeholder="https://.../imagem.jpg"><small class="format-hint">Se preenchida, ela substituirá o ícone padrão de quadrinhos.</small></div><div class="field full"><label><input name="isPublic" type="checkbox" ${existing?.isPublic !== false ? "checked" : ""}> Coleção pública — aparecerá no perfil e poderá ser compartilhada</label></div><div class="field full"><label>Quadrinhos nesta coleção</label><div class="collection-picker">${savedItems.map(item => `<label><input type="checkbox" name="itemIds" value="${escapeHTML(item.id)}" ${existing?.itemIds?.includes(item.id) ? "checked" : ""}> ${escapeHTML(item.seriesTitle || item.title)}${item.issue ? ` — ${escapeHTML(item.issue)}` : ""}</label>`).join("") || "Salve algum quadrinho primeiro."}</div></div></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar coleção</button></div></form></div>`;
     $("#modal-root").appendChild(overlay);
     $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
     $("#shelf-category-form", overlay).onsubmit = async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      const category = { id: existing?.id || `shelf-${Date.now()}`, name: String(form.get("name") || "").trim(), itemIds: form.getAll("itemIds") };
+      const category = { id: existing?.id || `shelf-${Date.now()}`, name: String(form.get("name") || "").trim(), coverUrl: String(form.get("coverUrl") || "").trim(), isPublic: form.get("isPublic") === "on", itemIds: form.getAll("itemIds") };
       if (!category.name) return;
       const categories = existing ? state.shelfCategories.map(item => item.id === category.id ? category : item) : [...state.shelfCategories, category];
       state.shelfCategories = categories;
       overlay.remove();
-      await saveShelfPreferences({ shelf_categories: categories });
+      await saveShelfCategories(categories);
     };
   }
 
   function deleteShelfCategory(categoryId) {
     if (!confirm("Excluir esta subcategoria? Os quadrinhos não serão excluídos da coleção Salvos.")) return;
     state.shelfCategories = state.shelfCategories.filter(category => category.id !== categoryId);
-    saveShelfPreferences({ shelf_categories: state.shelfCategories });
+    saveShelfCategories(state.shelfCategories);
   }
 
   function renderShelfPage() {
@@ -2428,7 +2455,47 @@
     const readItems = shelfItemsByIds([...snapshot.read]);
     const canCustomize = ["admin", "premium"].includes(state.profile?.plan);
     const categories = state.shelfCategories.map(category => ({ ...category, itemIds: (category.itemIds || []).filter(id => snapshot.saved.has(id)) }));
-    return `<div class="content"><div class="profile-header">${avatarMarkup(state.profile)}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">Coleções fixas para organizar seus quadrinhos</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div>${shelfCollectionMarkup("Salvos", savedItems, "saved")}${shelfCollectionMarkup("Lidos", readItems, "read")}${canCustomize ? `<section class="section shelf-categories"><div class="section-head"><div><h2 class="section-title">Subcategorias</h2><div class="section-subtitle">Organize os itens da coleção Salvos</div></div><button class="small-btn" data-shelf-new-category>+ Nova subcategoria</button></div>${categories.map(category => shelfCollectionMarkup(category.name, shelfItemsByIds(category.itemIds), `category:${category.id}`, state.readingProgress, state.favoriteIds, `<button class="small-btn" data-shelf-edit-category="${escapeHTML(category.id)}">Editar</button><button class="small-btn danger" data-shelf-delete-category="${escapeHTML(category.id)}">Excluir</button>`)).join("") || '<div class="empty">Crie uma subcategoria para começar a organizar seus salvos.</div>'}</section>` : ""}</div>`;
+    return `<div class="content"><div class="profile-header">${avatarMarkup(state.profile)}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">Coleções fixas para organizar seus quadrinhos</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div>${shelfCollectionMarkup("Salvos", savedItems, "saved")}${shelfCollectionMarkup("Lidos", readItems, "read")}${canCustomize ? `<section class="section shelf-categories"><div class="section-head"><div><h2 class="section-title">Coleções pessoais</h2><div class="section-subtitle">Coleções públicas aparecem no seu perfil e podem ser compartilhadas</div></div><button class="small-btn" data-shelf-new-category>+ Nova coleção</button></div>${categories.map(category => shelfCollectionMarkup(category.name, shelfItemsByIds(category.itemIds), `category:${category.id}`, state.readingProgress, state.favoriteIds, `<span class="shelf-visibility ${category.isPublic !== false ? "is-public" : "is-private"}">${category.isPublic !== false ? "Pública" : "Privada"}</span>${category.isPublic !== false ? `<button class="small-btn" data-copy-collection="${escapeHTML(category.id)}">Compartilhar</button>` : ""}<button class="small-btn" data-shelf-edit-category="${escapeHTML(category.id)}">Editar</button><button class="small-btn danger" data-shelf-delete-category="${escapeHTML(category.id)}">Excluir</button>`)).join("") || '<div class="empty">Crie uma coleção para começar a organizar seus salvos.</div>'}</section>` : ""}</div>`;
+  }
+
+  function renderPublicCollectionPage(publicState, category) {
+    const profile = publicState.profile;
+    const allItems = uniqueCatalogItems(state.db.library.filter(item => (category.itemIds || []).includes(item.id) && publicState.favoriteIds.has(item.id)));
+    const filter = state.collectionFilter || { field: "all", query: "" };
+    const items = filterCollectionItems(allItems, filter.field, filter.query);
+    const isLiked = publicState.collectionLikes?.has(category.id);
+    const likes = publicState.collectionLikeCounts?.get(category.id) || 0;
+    const cover = category.coverUrl ? `style="background-image:url('${escapeHTML(category.coverUrl)}')"` : "";
+    return `<div class="content public-collection-page"><div class="public-collection-hero"><div class="public-collection-icon ${category.coverUrl ? "has-cover" : ""}" ${cover}>${category.coverUrl ? "" : "▣"}</div><div><div class="eyebrow">Coleção pública</div><h1 class="section-title">${escapeHTML(category.name)}</h1><div class="section-subtitle">Por <a class="collection-creator" href="${escapeHTML(publicProfileHref(profile.username))}">@${escapeHTML(profile.username)}</a> · ${allItems.length} item(ns)</div></div></div><div class="section-head"><div><h2 class="section-title">${escapeHTML(category.name)}</h2><div class="section-subtitle">Uma coleção compartilhada da Banca Digital</div></div><div class="shelf-section-actions"><button class="small-btn ${isLiked ? "is-liked" : ""}" data-like-collection="${escapeHTML(category.id)}" data-like-owner="${escapeHTML(profile.id)}">${isLiked ? "♥ Curtida" : "♡ Curtir"} · ${likes}</button><button class="small-btn" data-copy-collection="${escapeHTML(category.id)}" data-copy-username="${escapeHTML(profile.username)}">Copiar link</button><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username))}">Ver perfil</a></div></div><form class="collection-filter" data-collection-filter-form><select name="field"><option value="all" ${filter.field === "all" ? "selected" : ""}>Filtrar por qualquer campo</option><option value="author" ${filter.field === "author" ? "selected" : ""}>Autor</option><option value="publisher" ${filter.field === "publisher" ? "selected" : ""}>Editora</option><option value="character" ${filter.field === "character" ? "selected" : ""}>Personagem</option><option value="tag" ${filter.field === "tag" ? "selected" : ""}>Gênero / tag</option><option value="seriesTitle" ${filter.field === "seriesTitle" ? "selected" : ""}>Série</option><option value="title" ${filter.field === "title" ? "selected" : ""}>Título</option></select><input name="query" value="${escapeHTML(filter.query)}" placeholder="Digite para filtrar a coleção"><button class="small-btn">Filtrar</button></form><div class="collection-results-meta">${items.length} de ${allItems.length} item(ns)</div><div class="results-grid">${items.map(item => card(item, publicState.readingProgress, publicState.favoriteIds)).join("") || '<div class="empty">Nenhum quadrinho corresponde ao filtro.</div>'}</div></div>`;
+  }
+
+  function filterCollectionItems(items, field, query) {
+    const normalized = String(query || "").trim().toLowerCase();
+    if (!normalized) return items;
+    return items.filter(item => {
+      const values = field === "tag" ? (item.tags || []) : field === "all" ? [item.title, item.seriesTitle, item.author, item.publisher, item.character, ...(item.tags || [])] : [item[field]];
+      return values.some(value => String(value || "").toLowerCase().includes(normalized));
+    });
+  }
+
+  async function toggleCollectionLike(ownerId, collectionId) {
+    if (!state.session) return openAuthPage();
+    const publicState = state.publicProfile;
+    if (!publicState?.collectionLikes) return;
+    const liked = publicState.collectionLikes.has(collectionId);
+    const query = sb.from("shelf_collection_likes");
+    const result = liked
+      ? await query.delete().eq("owner_id", ownerId).eq("collection_id", collectionId).eq("user_id", state.session.user.id)
+      : await query.insert({ owner_id: ownerId, collection_id: collectionId, user_id: state.session.user.id });
+    if (result.error) return toast("Não foi possível atualizar a curtida.");
+    if (liked) {
+      publicState.collectionLikes.delete(collectionId);
+      publicState.collectionLikeCounts.set(collectionId, Math.max(0, (publicState.collectionLikeCounts.get(collectionId) || 1) - 1));
+    } else {
+      publicState.collectionLikes.add(collectionId);
+      publicState.collectionLikeCounts.set(collectionId, (publicState.collectionLikeCounts.get(collectionId) || 0) + 1);
+    }
+    render();
   }
 
   function renderPublicProfilePage() {
@@ -2440,6 +2507,10 @@
     const readVisible = !["admin", "premium"].includes(profile.plan) || profile.shelf_read_public !== false;
     const savedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.favoriteIds.has(item.id)));
     const readItems = uniqueCatalogItems(state.db.library.filter(item => publicState.readingProgress.get(item.id)?.completed));
+    const publicCategories = (publicState.collections || []).filter(category => category.isPublic !== false);
+    const selectedCategory = publicCategories.find(category => category.id === publicState.collectionId);
+    if (publicState.collectionId && selectedCategory) return renderPublicCollectionPage(publicState, selectedCategory);
+    if (publicState.collectionId && !selectedCategory) return `<div class="content"><div class="empty">Esta coleção não existe ou é privada.</div><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username))}">Voltar ao perfil</a></div>`;
     return `<div class="content public-profile-page">
       <div class="profile-header">
         ${avatarMarkup(profile)}
@@ -2452,6 +2523,7 @@
       <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">Coleções públicas do perfil</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div>
       ${savedVisible ? shelfCollectionMarkup("Salvos", savedItems, "public-saved", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Salvos está oculta neste perfil.</div>'}
       ${readVisible ? shelfCollectionMarkup("Lidos", readItems, "public-read", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Lidos está oculta neste perfil.</div>'}
+      ${publicCategories.map(category => { const items = uniqueCatalogItems(state.db.library.filter(item => (category.itemIds || []).includes(item.id) && publicState.favoriteIds.has(item.id))); const liked = publicState.collectionLikes?.has(category.id); const likes = publicState.collectionLikeCounts?.get(category.id) || 0; return shelfCollectionMarkup(category.name, items, `public-category:${category.id}`, publicState.readingProgress, publicState.favoriteIds, `<span class="shelf-visibility is-public">Pública</span><button class="small-btn ${liked ? "is-liked" : ""}" data-like-collection="${escapeHTML(category.id)}" data-like-owner="${escapeHTML(profile.id)}">${liked ? "♥" : "♡"} ${likes}</button><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username, category.id))}">Abrir coleção</a><button class="small-btn" data-copy-collection="${escapeHTML(category.id)}" data-copy-username="${escapeHTML(profile.username)}">Compartilhar</button>`); }).join("")}
     </div>`;
   }
 
@@ -2591,6 +2663,9 @@
     $('[data-shelf-new-category]')?.addEventListener("click", () => openShelfCategoryForm());
     $$('[data-shelf-edit-category]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openShelfCategoryForm(el.dataset.shelfEditCategory); }));
     $$('[data-shelf-delete-category]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); deleteShelfCategory(el.dataset.shelfDeleteCategory); }));
+    $$('[data-copy-collection]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); copyCollectionLink(el.dataset.copyCollection, el.dataset.copyUsername || state.profile?.username); }));
+    $$('[data-like-collection]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleCollectionLike(el.dataset.likeOwner, el.dataset.likeCollection); }));
+    $("[data-collection-filter-form]")?.addEventListener("submit", event => { event.preventDefault(); const form = new FormData(event.currentTarget); state.collectionFilter = { field: String(form.get("field") || "all"), query: String(form.get("query") || "") }; render(); });
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
       const item = state.db.library.find(x => x.id === el.dataset.open);
       openItem(item);
@@ -3032,6 +3107,7 @@
   const pathParts = window.location.pathname.split("/").filter(Boolean);
   const routeParts = pathParts[0]?.toLowerCase() === "banca-digital-quadrinhos-v3" ? pathParts.slice(1) : pathParts;
   const queryProfile = new URLSearchParams(window.location.search).get("perfil");
+  const queryPublicCollection = new URLSearchParams(window.location.search).get("lista");
   const initialPublicUsername = queryProfile
     ? cleanUsername(queryProfile)
     : routeParts.length === 1 && routeParts[0].toLowerCase() !== "index.html"
@@ -3039,7 +3115,7 @@
       : "";
   if (initialPublicUsername && /^[a-z0-9_]{3,24}$/.test(initialPublicUsername)) {
     state.section = "public-profile";
-    state.publicProfile = { loading: true, username: initialPublicUsername };
+    state.publicProfile = { loading: true, username: initialPublicUsername, collectionId: queryPublicCollection };
   }
   if (initialPublicUsername) render();
   else applyRoute();
@@ -3051,6 +3127,6 @@
     }
   });
   loadAccount()
-    .then(() => initialPublicUsername && loadPublicProfile(initialPublicUsername))
+    .then(() => initialPublicUsername && loadPublicProfile(initialPublicUsername, queryPublicCollection))
     .catch(error => console.warn("Supabase indisponível:", error));
 })();

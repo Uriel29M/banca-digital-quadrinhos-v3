@@ -17,6 +17,26 @@ alter table public.profiles add column if not exists shelf_read_public boolean n
 alter table public.profiles add column if not exists shelf_categories jsonb not null default '[]'::jsonb;
 create unique index if not exists profiles_account_email_key on public.profiles(account_email) where account_email is not null;
 
+create table if not exists public.shelf_collections (
+  id text primary key,
+  owner_id uuid not null references public.profiles(id) on delete cascade,
+  name text not null check (char_length(name) between 1 and 60),
+  cover_url text,
+  is_public boolean not null default true,
+  item_ids jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+insert into public.shelf_collections (id, owner_id, name, cover_url, is_public, item_ids)
+select category->>'id', profiles.id, category->>'name', category->>'coverUrl', coalesce((category->>'isPublic')::boolean, true), coalesce(category->'itemIds', '[]'::jsonb)
+from public.profiles
+cross join lateral jsonb_array_elements(coalesce(profiles.shelf_categories, '[]'::jsonb)) as category
+where category->>'id' is not null and category->>'name' is not null
+on conflict (id) do nothing;
+
+alter table public.profiles drop column if exists shelf_categories;
+
 create table if not exists public.favorites (
   user_id uuid not null references public.profiles(id) on delete cascade,
   item_id text not null,
@@ -32,6 +52,14 @@ create table if not exists public.reading_progress (
   completed boolean not null default false,
   updated_at timestamptz not null default now(),
   primary key (user_id, item_id)
+);
+
+create table if not exists public.shelf_collection_likes (
+  owner_id uuid not null references public.profiles(id) on delete cascade,
+  collection_id text not null,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (owner_id, collection_id, user_id)
 );
 
 create table if not exists public.comments (
@@ -95,6 +123,8 @@ grant execute on function public.get_login_email(text) to anon, authenticated;
 alter table public.profiles enable row level security;
 alter table public.favorites enable row level security;
 alter table public.reading_progress enable row level security;
+alter table public.shelf_collections enable row level security;
+alter table public.shelf_collection_likes enable row level security;
 alter table public.comments enable row level security;
 alter table public.achievements enable row level security;
 alter table public.user_achievements enable row level security;
@@ -106,6 +136,10 @@ drop policy if exists "favorites are public" on public.favorites;
 drop policy if exists "users manage own favorites" on public.favorites;
 drop policy if exists "reading progress is public" on public.reading_progress;
 drop policy if exists "users manage own reading progress" on public.reading_progress;
+drop policy if exists "public collections are visible" on public.shelf_collections;
+drop policy if exists "owners manage collections" on public.shelf_collections;
+drop policy if exists "collection likes are public" on public.shelf_collection_likes;
+drop policy if exists "users manage collection likes" on public.shelf_collection_likes;
 drop policy if exists "comments are public" on public.comments;
 drop policy if exists "users create own comments" on public.comments;
 drop policy if exists "users delete own comments" on public.comments;
@@ -122,6 +156,26 @@ create policy "favorites are public" on public.favorites for select using (true)
 create policy "users manage own favorites" on public.favorites for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "reading progress is public" on public.reading_progress for select using (true);
 create policy "users manage own reading progress" on public.reading_progress for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "public collections are visible" on public.shelf_collections for select using (is_public or auth.uid() = owner_id);
+create policy "owners manage collections" on public.shelf_collections for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "collection likes are public" on public.shelf_collection_likes for select using (
+  exists (
+    select 1 from public.shelf_collections collection
+    where collection.id = shelf_collection_likes.collection_id
+      and collection.owner_id = shelf_collection_likes.owner_id
+      and collection.is_public
+  )
+);
+create policy "users manage collection likes" on public.shelf_collection_likes for all
+using (auth.uid() = user_id)
+with check (
+  auth.uid() = user_id and exists (
+    select 1 from public.shelf_collections collection
+    where collection.id = shelf_collection_likes.collection_id
+      and collection.owner_id = shelf_collection_likes.owner_id
+      and collection.is_public
+  )
+);
 create policy "comments are public" on public.comments for select using (true);
 create policy "users create own comments" on public.comments for insert with check (auth.uid() = user_id);
 create policy "users delete own comments" on public.comments for delete using (auth.uid() = user_id or public.is_admin());
