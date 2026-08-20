@@ -233,6 +233,20 @@ main { min-height: calc(100vh - 150px); }
 .feature-info h3 { margin: 0 0 5px; }
 .feature-info p { margin: 0; color: #bdbdc3; font-size: 12px; }
 
+.publisher-carousel { display: flex; gap: 14px; overflow-x: auto; padding: 10px 2px 12px; scrollbar-width: thin; }
+.publisher-card { position: relative; flex: 0 0 210px; min-height: 150px; overflow: hidden; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: white; text-align: left; cursor: pointer; transition: transform .18s ease, border-color .18s ease; }
+.publisher-card:hover { transform: translateY(-3px); border-color: var(--accent); }
+.publisher-card-cover, .publisher-card-overlay { position: absolute; inset: 0; }
+.publisher-card-cover { background: center/cover no-repeat; filter: saturate(.82); }
+.publisher-card-overlay { background: linear-gradient(0deg, rgba(0,0,0,.95), rgba(0,0,0,.08) 78%); }
+.publisher-card-info { position: absolute; right: 14px; bottom: 13px; left: 14px; z-index: 1; display: grid; gap: 4px; }
+.publisher-card-info strong { font-size: 16px; }
+.publisher-card-info span { color: #c5c5ce; font-size: 11px; }
+.publisher-page-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.publisher-pin-badge { display: inline-block; margin: -4px 0 18px; padding: 6px 10px; border: 1px solid rgba(255,212,92,.45); border-radius: 999px; color: #ffd45c; font-size: 12px; }
+.publisher-imprint { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
+.publisher-imprint:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+
 .search-wrap {
   display: flex; gap: 10px; max-width: 800px; margin: 25px auto 40px;
 }

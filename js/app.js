@@ -61,7 +61,8 @@
     achievementChecks: new Set(),
     achievements: [],
     localBoxFiles: [],
-    localBoxVisible: false
+    localBoxVisible: false,
+    publisherSettings: new Map()
   };
 
   let activeReaderCleanup = null;
@@ -161,6 +162,26 @@
     return String(value || "").replace(/^@/, "").trim().toLowerCase();
   }
 
+  function publisherKey(value = "") {
+    return String(value).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "sem-editora";
+  }
+
+  function skipCoverStorageKey(userId = state.session?.user?.id) {
+    return userId ? `bancaDigitalSkipCover:${userId}` : "";
+  }
+
+  function shouldSkipCover() {
+    const key = skipCoverStorageKey();
+    return Boolean(key && localStorage.getItem(key) === "true");
+  }
+
+  function saveSkipCoverPreference(value) {
+    const key = skipCoverStorageKey();
+    if (!key) return;
+    if (value) localStorage.setItem(key, "true");
+    else localStorage.removeItem(key);
+  }
+
   function avatarMarkup(profile, className = "profile-avatar") {
     const planClass = profile?.plan === "admin" ? "avatar-admin" : profile?.plan === "moderator" ? "avatar-moderator" : profile?.plan === "premium" ? "avatar-premium" : "";
     return `<img class="${className} ${planClass}" src="${escapeHTML(profile?.avatar_url || DEFAULT_AVATAR_URL)}" alt="Foto de ${escapeHTML(profile?.username || "usuário")}">`;
@@ -183,12 +204,20 @@
     if (!sb) return;
     const { data: { session } } = await sb.auth.getSession();
     state.session = session;
+    const publisherSettings = await sb.from("publisher_settings").select("publisher_key, publisher_name, cover_url, is_pinned");
+    state.publisherSettings = new Map((publisherSettings.data || []).map(setting => [setting.publisher_key, setting]));
     const comicLikes = await sb.from("comic_likes").select("item_id, user_id");
     state.comicLikeIds = new Set((comicLikes.data || []).filter(row => row.user_id === session?.user?.id).map(row => row.item_id));
     state.comicLikeCounts = (comicLikes.data || []).reduce((counts, row) => counts.set(row.item_id, (counts.get(row.item_id) || 0) + 1), new Map());
     if (session?.user) {
       const profile = await sb.from("profiles").select("*").eq("id", session.user.id).single();
       state.profile = profile.data;
+      const currentReader = state.section === "reader" ? state.db.library.find(item => item.id === state.readerItemId) : null;
+      if (currentReader && shouldSkipCover()) {
+        activeReaderCleanup?.();
+        activeReaderCleanup = null;
+        openReader(currentReader, { routeSync: true, skipCover: true });
+      }
       if (state.profile?.is_banned && !["moderator", "admin"].includes(state.profile.plan)) {
         await sb.auth.signOut();
         state.session = null;
@@ -928,7 +957,7 @@
     const format = /^(pdf|cbz|cbr|jpg|jpeg|png|webp|gif)$/.test(itemFormat)
       ? itemFormat
       : (fileFormat || extension(resolvedUrl)).toLowerCase();
-    const skipCover = options.skipCover === true;
+    const skipCover = Object.prototype.hasOwnProperty.call(options, "skipCover") ? options.skipCover === true : shouldSkipCover();
     const savedProgress = progressFor(item);
     const resumePage = savedProgress?.page || (skipCover ? 2 : 1);
     let readerGrayscale = options.grayscale === true;
@@ -976,15 +1005,17 @@
     activeReaderCleanup = cleanupReader;
     closeReaderButton.onclick = () => {
       cleanupReader();
-      if (!handlingRoute && new URLSearchParams(window.location.search).get("ler")) window.history.back();
+      setSection("home");
     };
     $("[data-like-item]", overlay)?.addEventListener("click", event => { event.stopPropagation(); toggleComicLike(item.id); });
     $("[data-share-item]", overlay)?.addEventListener("click", event => { event.stopPropagation(); shareComic(item.id); });
     $("[data-comment-item]", overlay)?.addEventListener("click", event => { event.stopPropagation(); openCommentsPopup(item); });
     $("[data-open-external]", overlay).onclick = () => window.open(resolvedUrl, "_blank", "noopener");
     $("[data-toggle-cover]", overlay)?.addEventListener("click", () => {
-      overlay.remove();
-      openReader(item, { skipCover: !skipCover, localObjectUrl: options.localObjectUrl });
+      const nextSkipCover = !skipCover;
+      if (state.session?.user?.id) saveSkipCoverPreference(nextSkipCover);
+      cleanupReader();
+      openReader(item, { skipCover: nextSkipCover, localObjectUrl: options.localObjectUrl, routeSync: true, grayscale: readerGrayscale });
     });
 
     $("[data-toggle-grayscale]", overlay)?.addEventListener("click", event => {
@@ -2608,9 +2639,23 @@
 
   function renderEntityPage() {
     const filter = state.entityFilter || { kind: "character", value: "" };
-    const items = state.db.library.filter(item => String(item[filter.kind] || "").toLowerCase() === String(filter.value || "").toLowerCase());
+    const items = state.db.library.filter(item => String(item[filter.kind] || "").toLowerCase() === String(filter.value || "").toLowerCase() && (filter.kind !== "publisher" || item.type === "comic"));
     const title = filter.kind === "publisher" ? "Editora" : "Personagem";
-    return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) relacionadas a ${title.toLowerCase()}</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div><section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
+    if (filter.kind !== "publisher") return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) relacionadas a ${title.toLowerCase()}</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div><section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
+    const setting = state.publisherSettings.get(publisherKey(filter.value));
+    const canManage = ["moderator", "admin"].includes(state.profile?.plan);
+    const grouped = new Map();
+    const initialFor = item => { const initial = String(item.seriesTitle || item.title || "").trim().charAt(0).toUpperCase(); return /[0-9]/.test(initial) ? "0-9" : /^[A-Z]$/.test(initial) ? initial : "#"; };
+    items.forEach(item => {
+      const imprint = String(item.imprint || "Sem selo").trim() || "Sem selo";
+      if (!grouped.has(imprint)) grouped.set(imprint, new Map());
+      const initial = initialFor(item);
+      if (!grouped.get(imprint).has(initial)) grouped.get(imprint).set(initial, []);
+      grouped.get(imprint).get(initial).push(item);
+    });
+    const initialOrder = ["0-9", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""), "#"];
+    const imprintMarkup = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, "pt-BR")).map(([imprint, initials]) => `<section class="search-imprint publisher-imprint"><div class="section-head"><div><h2 class="section-title">${escapeHTML(imprint)}</h2><div class="section-subtitle">Selo</div></div></div>${initialOrder.filter(initial => initials.has(initial)).map(initial => `<section class="search-initial"><h3 class="search-initial-title">${initial}</h3><div class="results-grid">${initials.get(initial).sort((a, b) => String(a.seriesTitle || a.title).localeCompare(String(b.seriesTitle || b.title), "pt-BR")).map(item => card(item)).join("")}</div></section>`).join("")}</section>`).join("");
+    return `<div class="content publisher-page"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) da editora</div></div><div class="publisher-page-actions"><button class="small-btn" data-section="home">Voltar ao início</button>${canManage ? `<button class="small-btn" data-publisher-settings="${escapeHTML(filter.value)}">Configurar editora</button>` : ""}</div></div>${setting?.is_pinned ? '<div class="publisher-pin-badge">★ Editora fixada no carrossel</div>' : ""}${imprintMarkup || '<div class="empty">Nenhuma edição encontrada.</div>'}</div>`;
   }
 
   function renderLoginPage() {
@@ -3005,6 +3050,37 @@
     window.scrollTo({top:0, behavior:"smooth"});
   }
 
+  function openPublisherSettings(name) {
+    if (!sb || !["moderator", "admin"].includes(state.profile?.plan)) return;
+    const key = publisherKey(name);
+    const setting = state.publisherSettings.get(key) || {};
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal publisher-settings-modal"><div class="section-head"><div><h2>Configurar editora</h2><div class="section-subtitle">${escapeHTML(name)}</div></div><button class="small-btn" data-close>Fechar</button></div><form id="publisher-settings-form"><div class="field"><label>Enviar imagem do card</label><input name="coverFile" type="file" accept="image/png,image/jpeg,image/webp"><small class="format-hint">A imagem será armazenada no Supabase e usada no card.</small></div><div class="field"><label>Ou use uma URL de imagem</label><input name="coverUrl" type="url" value="${escapeHTML(setting.cover_url || "")}" placeholder="https://.../imagem.jpg"></div><label class="checkbox-inline"><input name="isPinned" type="checkbox" ${setting.is_pinned ? "checked" : ""}> Fixar no carrossel de destaque</label><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar configuração</button></div></form></div>`;
+    $("#modal-root").appendChild(overlay);
+    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $("#publisher-settings-form", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      let coverUrl = String(form.get("coverUrl") || "").trim() || null;
+      const coverFile = form.get("coverFile");
+      if (coverFile?.size) {
+        const extension = String(coverFile.name || "jpg").split(".").pop().toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+        const path = `${state.session.user.id}/${key}-${Date.now()}.${extension}`;
+        const upload = await sb.storage.from("publisher-covers").upload(path, coverFile, { upsert: true, contentType: coverFile.type || "image/jpeg" });
+        if (upload.error) return toast("Não foi possível enviar a imagem. Verifique o bucket publisher-covers no Supabase.");
+        coverUrl = sb.storage.from("publisher-covers").getPublicUrl(path).data.publicUrl;
+      }
+      const next = { publisher_key: key, publisher_name: name, cover_url: coverUrl, is_pinned: form.get("isPinned") === "on" };
+      const result = await sb.from("publisher_settings").upsert(next, { onConflict: "publisher_key" });
+      if (result.error) return toast("Não foi possível salvar a configuração da editora. Execute a atualização do schema no Supabase.");
+      state.publisherSettings.set(key, next);
+      overlay.remove();
+      render();
+      toast("Configuração da editora salva.");
+    };
+  }
+
   function bind() {
     syncActiveNav();
     const canManage = state.profile?.plan === "admin";
@@ -3023,6 +3099,8 @@
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
     $$('[data-like-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleComicLike(el.dataset.likeItem); }));
     $$('[data-share-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); shareComic(el.dataset.shareItem); }));
+    $$('[data-publisher]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openEntityPage("publisher", el.dataset.publisher); }));
+    $$('[data-publisher-settings]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openPublisherSettings(el.dataset.publisherSettings); }));
     $$('[data-comment-item]').forEach(el => el.addEventListener("click", event => {
       event.stopPropagation();
       const item = state.db.library.find(entry => entry.id === el.dataset.commentItem);
@@ -3319,6 +3397,23 @@
     };
   }
 
+  function renderCatalog(type = null) {
+    const items = type ? state.db.library.filter(x => x.type === type) : state.db.library;
+    const series = uniqueCatalogItems(items.filter(x => x.seriesId));
+    const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
+    const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
+    const group = (title, groupItems) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => card(item)).join("")}</div></section>` : "";
+    const publishers = new Map();
+    items.filter(item => String(item.publisher || "").trim()).forEach(item => {
+      const publisher = String(item.publisher).trim();
+      if (!publishers.has(publisher)) publishers.set(publisher, []);
+      publishers.get(publisher).push(item);
+    });
+    const publisherCarousel = type === "comic" && publishers.size ? `<section class="section publisher-carousel-section"><div class="section-head"><div><h2 class="section-title">Editoras</h2><div class="section-subtitle">Explore os quadrinhos por editora</div></div></div><div class="publisher-carousel">${[...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR")).map(([publisher, publisherItems]) => { const representative = publisherItems.find(item => item.featuredCoverUrl || item.coverUrl || item.cover) || publisherItems[0]; return `<button class="publisher-card" type="button" data-publisher="${escapeHTML(publisher)}"><div class="publisher-card-cover" style="background-image:url('${escapeHTML(coverFor(representative))}')"></div><div class="publisher-card-overlay"></div><div class="publisher-card-info"><strong>${escapeHTML(publisher)}</strong><span>${publisherItems.length} quadrinho(s)</span></div></button>`; }).join("")}</div></section>` : "";
+    const catalogHeader = type === "comic" ? "" : `<div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>`;
+    return `<div class="content">${catalogHeader}${publisherCarousel}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
+  }
+
   function openSubmission() {
     const overlay = document.createElement("div");
     overlay.className = "modal-backdrop";
@@ -3498,6 +3593,39 @@
     </div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Enviar para análise</button></div></form></div>`;
     $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
     $("#submission-form", overlay).onsubmit = event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const seriesTitle = String(fd.get("seriesTitle") || "").trim(); state.db.submissions.push({ id: "sub-" + Date.now(), author: String(fd.get("author") || "").trim(), seriesTitle, seriesId: seriesTitle ? seriesKey(seriesTitle) : "", title: String(fd.get("title") || "").trim(), issue: String(fd.get("issue") || "").trim(), type: fd.get("type"), year: Number(fd.get("year")) || "", publisher: String(fd.get("publisher") || "").trim(), imprint: String(fd.get("imprint") || "").trim(), character: String(fd.get("character") || "").trim(), fileUrl: String(fd.get("sourceUrl") || "").trim(), format: detectFormat(fd.get("sourceUrl") || ""), message: String(fd.get("message") || ""), createdAt: new Date().toISOString() }); save(); overlay.remove(); toast("Envio registrado para análise."); };
+  }
+
+  function renderCatalog(type = null) {
+    const items = type ? state.db.library.filter(x => x.type === type) : state.db.library;
+    const series = uniqueCatalogItems(items.filter(x => x.seriesId));
+    const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
+    const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
+    const group = (title, groupItems) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => card(item)).join("")}</div></section>` : "";
+    const publishers = new Map();
+    items.filter(item => String(item.publisher || "").trim()).forEach(item => {
+      const publisher = String(item.publisher).trim();
+      if (!publishers.has(publisher)) publishers.set(publisher, []);
+      publishers.get(publisher).push(item);
+    });
+    const publisherCarousel = type === "comic" && publishers.size ? `<section class="section publisher-carousel-section"><div class="section-head"><div><h2 class="section-title">Editoras</h2><div class="section-subtitle">Explore os quadrinhos por editora</div></div></div><div class="publisher-carousel">${[...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR")).map(([publisher, publisherItems]) => { const representative = publisherItems.find(item => item.featuredCoverUrl || item.coverUrl || item.cover) || publisherItems[0]; return `<button class="publisher-card" type="button" data-publisher="${escapeHTML(publisher)}"><div class="publisher-card-cover" style="background-image:url('${escapeHTML(coverFor(representative))}')"></div><div class="publisher-card-overlay"></div><div class="publisher-card-info"><strong>${escapeHTML(publisher)}</strong><span>${publisherItems.length} quadrinho(s)</span></div></button>`; }).join("")}</div></section>` : "";
+    const catalogHeader = type === "comic" ? "" : `<div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>`;
+    return `<div class="content">${catalogHeader}${publisherCarousel}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
+  }
+
+  function renderCatalog(type = null) {
+    const items = type ? state.db.library.filter(x => x.type === type) : state.db.library;
+    const series = uniqueCatalogItems(items.filter(x => x.seriesId));
+    const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
+    const group = (title, groupItems) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => card(item)).join("")}</div></section>` : "";
+    const publishers = new Map();
+    items.filter(item => String(item.publisher || "").trim()).forEach(item => { const name = String(item.publisher).trim(); if (!publishers.has(name)) publishers.set(name, []); publishers.get(name).push(item); });
+    const publisherEntries = [...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR"));
+    const publisherCard = ([name, publisherItems]) => { const setting = state.publisherSettings.get(publisherKey(name)); const representative = publisherItems.find(item => item.featuredCoverUrl || item.coverUrl || item.cover) || publisherItems[0]; const cover = setting?.cover_url || coverFor(representative); return `<button class="publisher-card ${setting?.is_pinned ? "is-pinned" : ""}" type="button" data-publisher="${escapeHTML(name)}"><div class="publisher-card-cover" style="background-image:url('${escapeHTML(cover)}')"></div><div class="publisher-card-overlay"></div><div class="publisher-card-info"><strong>${escapeHTML(name)}</strong><span>${publisherItems.length} quadrinho(s)</span></div></button>`; };
+    const pinned = publisherEntries.filter(([name]) => state.publisherSettings.get(publisherKey(name))?.is_pinned);
+    const publisherCarousel = type === "comic" && publisherEntries.length ? `${pinned.length ? `<section class="section publisher-pinned-section"><div class="section-head"><div><h2 class="section-title">Editoras fixadas</h2><div class="section-subtitle">Acesso rápido às editoras em destaque</div></div></div><div class="publisher-carousel">${pinned.map(publisherCard).join("")}</div></section>` : ""}<section class="section publisher-all-section"><div class="section-head"><div><h2 class="section-title">Editoras</h2><div class="section-subtitle">Explore todos os quadrinhos por editora</div></div></div><div class="publisher-carousel">${publisherEntries.map(publisherCard).join("")}</div></section>` : "";
+    const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
+    const catalogHeader = type === "comic" ? "" : `<div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>`;
+    return `<div class="content">${catalogHeader}${publisherCarousel}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
   }
 
   window.addEventListener("popstate", applyRoute);
