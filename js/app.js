@@ -450,7 +450,7 @@
       render();
       return;
     }
-    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_read_public, profile_hidden, is_banned, silenced_until").ilike("username", username).maybeSingle();
+    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_read_public, shelf_liked_public, profile_hidden, is_banned, silenced_until").ilike("username", username).maybeSingle();
     if (profile.error) {
       profile = await sb.from("profiles").select("id, username, avatar_url, title, plan").ilike("username", username).maybeSingle();
     }
@@ -461,6 +461,7 @@
     }
     const favorites = await sb.from("favorites").select("item_id").eq("user_id", profile.data.id);
     const progress = await sb.from("reading_progress").select("item_id, page, total_pages, completed, updated_at").eq("user_id", profile.data.id);
+    const comicLikes = await sb.from("comic_likes").select("item_id").eq("user_id", profile.data.id);
     const collections = await sb.from("shelf_collections").select("id, name, cover_url, is_public, item_ids").eq("owner_id", profile.data.id).order("created_at", { ascending: true });
     const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", profile.data.id);
     const likes = await sb.from("shelf_collection_likes").select("collection_id, user_id").eq("owner_id", profile.data.id);
@@ -480,6 +481,7 @@
       collectionId,
       collections: (collections.data || []).map(collection => ({ id: collection.id, name: collection.name, coverUrl: collection.cover_url || "", isPublic: collection.is_public !== false, itemIds: Array.isArray(collection.item_ids) ? collection.item_ids : [] })),
       favoriteIds: new Set((favorites.data || []).map(row => row.item_id)),
+      comicLikeIds: new Set((comicLikes.data || []).map(row => row.item_id)),
       readingProgress: new Map((progress.data || []).map(row => [row.item_id, row])),
       achievements: (achievements.data || []).map(row => row.achievements).filter(Boolean),
       collectionLikes,
@@ -1165,6 +1167,19 @@
     overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Meu perfil</h2><div class="section-subtitle">Personalize seu @, sua foto e a visibilidade da estante</div></div><button class="small-btn" data-close>Fechar</button></div><form id="profile-form"><div class="form-grid"><div class="field full"><label>@usuário</label><input name="username" pattern="[A-Za-z0-9_]{3,24}" required value="${escapeHTML(state.profile?.username || "")}"></div><div class="field full"><label>Foto de perfil</label><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></div>${["admin", "moderator", "premium"].includes(state.profile?.plan) ? `<div class="field full"><label>Visibilidade no perfil público</label><label class="checkbox-inline"><input name="shelfSavedPublic" type="checkbox" ${state.profile?.shelf_saved_public !== false ? "checked" : ""}> Mostrar coleção Salvos</label><label class="checkbox-inline"><input name="shelfReadPublic" type="checkbox" ${state.profile?.shelf_read_public !== false ? "checked" : ""}> Mostrar coleção Lidos</label></div>` : ""}</div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar perfil</button></div></form></div>`;
     $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
     const profileForm = $("#profile-form", overlay);
+    const shelfVisibilityField = $$(".field.full", overlay).find(field => field.textContent.includes("Visibilidade"));
+    if (["admin", "moderator", "premium"].includes(state.profile?.plan) && shelfVisibilityField) {
+      shelfVisibilityField.insertAdjacentHTML("beforeend", `<label class="checkbox-inline"><input name="shelfLikedPublic" type="checkbox" ${state.profile?.shelf_liked_public !== false ? "checked" : ""}> Mostrar coleção Curtidos</label>`);
+    }
+    profileForm.addEventListener("submit", async event => {
+      if (!["admin", "moderator", "premium"].includes(state.profile?.plan)) return;
+      const likedVisibility = await sb.from("profiles").update({ shelf_liked_public: new FormData(event.currentTarget).get("shelfLikedPublic") === "on" }).eq("id", state.session.user.id);
+      if (likedVisibility.error) toast(likedVisibility.error.message);
+      else {
+        state.profile = { ...state.profile, shelf_liked_public: new FormData(event.currentTarget).get("shelfLikedPublic") === "on" };
+        render();
+      }
+    });
     const emailField = document.createElement("div");
     const currentEmail = state.session.user.email || "";
     const hasRecoveryEmail = currentEmail && !currentEmail.endsWith("@login.banca-digital.local");
@@ -3503,8 +3518,10 @@
     const profile = publicState.profile;
     const savedVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_saved_public !== false;
     const readVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_read_public !== false;
+    const likedVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_liked_public !== false;
     const savedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.favoriteIds.has(item.id)));
     const readItems = uniqueCatalogItems(state.db.library.filter(item => publicState.readingProgress.get(item.id)?.completed));
+    const likedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.comicLikeIds?.has(item.id)));
     const publicCategories = (publicState.collections || []).filter(category => category.isPublic !== false);
     const selectedCategory = publicCategories.find(category => category.id === publicState.collectionId);
     if (publicState.collectionId && selectedCategory) return renderPublicCollectionPage(publicState, selectedCategory);
@@ -3523,6 +3540,7 @@
       <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">${publicState.followerCount || 0} seguidores · ${publicState.followingCount || 0} seguindo · Coleções públicas do perfil</div></div><div class="profile-actions">${canFollow ? `<button class="small-btn follow-button ${publicState.isFollowing ? "is-following" : ""}" data-follow-profile>${publicState.isFollowing ? "Seguindo" : "Seguir"}</button>` : ""}<button class="small-btn" data-section="home">Voltar ao início</button>${canModerate ? `<button class="small-btn moderation-button" data-open-moderation>Moderação</button>` : ""}</div></div>
       ${savedVisible ? shelfCollectionMarkup("Salvos", savedItems, "public-saved", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Salvos está oculta neste perfil.</div>'}
       ${readVisible ? shelfCollectionMarkup("Lidos", readItems, "public-read", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Lidos está oculta neste perfil.</div>'}
+      ${likedVisible ? shelfCollectionMarkup("Curtidos", likedItems, "public-liked", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Curtidos está oculta neste perfil.</div>'}
       ${publicCategories.map(category => { const items = uniqueCatalogItems(state.db.library.filter(item => (category.itemIds || []).includes(item.id) && publicState.favoriteIds.has(item.id))); const liked = publicState.collectionLikes?.has(category.id); const likes = publicState.collectionLikeCounts?.get(category.id) || 0; return shelfCollectionMarkup(category.name, items, `public-category:${category.id}`, publicState.readingProgress, publicState.favoriteIds, `<span class="shelf-visibility is-public">Pública</span><button class="small-btn ${liked ? "is-liked" : ""}" data-like-collection="${escapeHTML(category.id)}" data-like-owner="${escapeHTML(profile.id)}">${liked ? "♥" : "♡"} ${likes}</button><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username, category.id))}">Abrir coleção</a><button class="small-btn" data-copy-collection="${escapeHTML(category.id)}" data-copy-username="${escapeHTML(profile.username)}">Compartilhar</button>`); }).join("")}
     </div>`;
   }

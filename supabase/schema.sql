@@ -17,6 +17,7 @@ alter table public.profiles add column if not exists account_email text;
 alter table public.profiles add column if not exists title_color text default '#ffd45c';
 alter table public.profiles add column if not exists shelf_saved_public boolean not null default true;
 alter table public.profiles add column if not exists shelf_read_public boolean not null default true;
+alter table public.profiles add column if not exists shelf_liked_public boolean not null default true;
 alter table public.profiles add column if not exists shelf_categories jsonb not null default '[]'::jsonb;
 alter table public.profiles add column if not exists profile_hidden boolean not null default false;
 alter table public.profiles add column if not exists is_banned boolean not null default false;
