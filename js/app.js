@@ -10,7 +10,7 @@
   function materializeSeriesItems(items = []) {
     const series = new Map((window.DEFAULT_SERIES || []).map(entry => [entry.id, entry]));
     return items.map(item => {
-      const inferredSeriesId = !item.seriesId && String(item.id || "").startsWith("harley-quinn-2021-")
+      const inferredSeriesId = String(item.id || "").startsWith("harley-quinn-2021-")
         ? "series-harley-quinn-2021"
         : item.seriesId;
       const definition = series.get(inferredSeriesId);
@@ -26,6 +26,11 @@
       if (merged.id === "harley-quinn-2021-annual") {
         merged.issue = "Anuário";
         merged.sortOrder = 6.5;
+      }
+      if (merged.id === "harley-quinn-2021-003") {
+        merged.seriesId = "series-harley-quinn-2021";
+        merged.issue = "3";
+        merged.fileUrl = "https://www.mediafire.com/file/jixe3r7igaresw9/Arlequina_003_%25282021%2529_%2528S%25C3%25B3Quadrinhos%2529.cbr/file";
       }
       merged.seriesTitle = item.seriesTitle || definition.name || definition.seriesTitle;
       merged.title = item.title || merged.seriesTitle;
