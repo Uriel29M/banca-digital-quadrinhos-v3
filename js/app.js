@@ -111,6 +111,11 @@
     });
   }
 
+  function isLegacyRemovedCatalogItem(item) {
+    const text = [item?.id, item?.seriesId, item?.title, item?.name, item?.seriesTitle, item?.originalTitle].join(" ");
+    return /tomoki-kun|onnanoko/i.test(text);
+  }
+
   const DataStore = {
     load() {
       try {
@@ -120,11 +125,13 @@
             ...(window.REMOVED_DEFAULT_ITEM_IDS || []),
             ...(Array.isArray(saved.removedItemIds) ? saved.removedItemIds : [])
           ]);
-          const hadRemovedItems = saved.library.some(item => removedItemIds.has(item.id));
-          saved.library = saved.library.filter(item => !removedItemIds.has(item.id));
+          const legacyRemovedSeriesIds = new Set(saved.library.filter(isLegacyRemovedCatalogItem).map(item => item.seriesId || item.id));
+          const isRemoved = item => removedItemIds.has(item.id) || isLegacyRemovedCatalogItem(item) || legacyRemovedSeriesIds.has(item.seriesId);
+          const hadRemovedItems = saved.library.some(isRemoved);
+          saved.library = saved.library.filter(item => !isRemoved(item));
           saved.collections = saved.collections.map(collection => ({
             ...collection,
-            issueIds: (collection.issueIds || []).filter(id => !removedItemIds.has(id))
+            issueIds: (collection.issueIds || []).filter(id => !removedItemIds.has(id) && !legacyRemovedSeriesIds.has(id))
           }));
           const oldAbsolutePowerIds = new Map([
             ["series-absolute-power-2024-02", "series-absolute-power-2024-01"],
@@ -155,7 +162,7 @@
           if (knightVolumesChanged || hadStargirlAdvertisement) this.save(saved);
           if (saved.library.some(item => item.id === "series-justice-godzilla-kong-2023-08" && String(item.fileUrl || "").includes("bpk2XxWKhFNO9s"))) this.save(saved);
           const knownIds = new Set(saved.library.map(item => item.id));
-          const newDefaults = materializeSeriesItems(structuredClone(window.DEFAULT_LIBRARY)).filter(item => !knownIds.has(item.id) && !removedItemIds.has(item.id));
+          const newDefaults = materializeSeriesItems(structuredClone(window.DEFAULT_LIBRARY)).filter(item => !knownIds.has(item.id) && !removedItemIds.has(item.id) && !isLegacyRemovedCatalogItem(item));
           if (newDefaults.length) {
             const merged = { ...saved, library: [...saved.library, ...newDefaults] };
             this.save(merged);
@@ -172,7 +179,7 @@
         removedItemIds: []
       };
       const removedItemIds = new Set(window.REMOVED_DEFAULT_ITEM_IDS || []);
-      fresh.library = fresh.library.filter(item => !removedItemIds.has(item.id));
+      fresh.library = fresh.library.filter(item => !removedItemIds.has(item.id) && !isLegacyRemovedCatalogItem(item));
       fresh.collections = fresh.collections.map(collection => ({
         ...collection,
         issueIds: (collection.issueIds || []).filter(id => !removedItemIds.has(id))
@@ -3683,14 +3690,15 @@
     const completed = progressFor(item, progressMap)?.completed;
     const displayTitle = itemDisplayTitle(item);
     const issueLabel = itemIssueLabel(item);
-    const canChooseCover = state.session && ["premium", "moderator", "admin"].includes(state.profile?.plan) && favoriteIds === state.favoriteIds && state.favoriteIds.has(item.id) && (state.coverVariants.get(item.id) || []).length > 0;
+    const coverVariants = state.coverVariants.get(item.id) || [];
+    const hasCoverVariants = coverVariants.length > 0;
+    const canChooseCover = state.session && ["premium", "moderator", "admin"].includes(state.profile?.plan) && favoriteIds === state.favoriteIds && state.favoriteIds.has(item.id) && hasCoverVariants;
     const authors = String(item.author || "").split(/\s*(?:\/|&|\be\b)\s*/i).map(value => value.trim()).filter(Boolean);
     const entityButton = (kind, value, label = value) => value ? `<button type="button" class="card-entity-link" data-entity-kind="${escapeHTML(kind)}" data-entity-value="${escapeHTML(value)}">${escapeHTML(label)}</button>` : "";
     return `
       <article class="card" data-open="${escapeHTML(item.id)}" ${(directOpen || (state.section === "public-profile" && state.publicProfile?.collectionId)) ? "data-open-direct=\"true\"" : ""}>
         <div class="cover" data-cover-id="${escapeHTML(item.id)}" style="background-image:url('${escapeHTML(coverFor(item, "card", coverChoices))}')">
           <span class="cover-number">${escapeHTML(issueLabel)}</span>
-          ${canChooseCover ? `<button class="card-cover-choice" data-cover-choice="${escapeHTML(item.id)}" title="Escolher capa">Capa</button>` : ""}
           <button class="card-favorite ${favoriteIds.has(item.id) ? 'is-favorite' : ''}" data-favorite="${escapeHTML(item.id)}" title="Salvar na estante">★</button>
         </div>
         ${completed ? '<div class="card-completed">✓ Lida</div>' : ''}
@@ -3698,8 +3706,8 @@
           <div class="card-title">${escapeHTML(displayTitle)}</div>
           <div class="card-meta">${entityButton("year", String(item.year || ""), String(item.year || ""))}${entityButton("character", item.character)}${entityButton("publisher", item.publisher)}${entityButton("imprint", item.imprint)}</div>
           ${authors.length ? `<div class="card-authors">${authors.map(author => entityButton("author", author)).join(" ")}</div>` : ""}
-          <div class="card-stats">♥ ${Number(item.clicks || 0).toLocaleString("pt-BR")} leituras</div>
-          <div class="card-actions"><button class="card-like ${state.comicLikeIds.has(item.id) ? "is-liked" : ""}" data-like-item="${escapeHTML(item.id)}" title="Curtir quadrinho">${state.comicLikeIds.has(item.id) ? "♥" : "♡"} ${state.comicLikeCounts.get(item.id) || 0}</button><button class="card-share" data-share-item="${escapeHTML(item.id)}" title="Compartilhar quadrinho">Compartilhar</button><button class="card-comment" data-comment-item="${escapeHTML(item.id)}" title="Ver comentários">Comentários</button></div>
+          <div class="card-stats"><span>♥ ${Number(item.clicks || 0).toLocaleString("pt-BR")} leituras</span>${canChooseCover ? `<button type="button" class="card-cover-choice" data-cover-choice="${escapeHTML(item.id)}" title="Escolher capa variante">Escolher capa</button>` : hasCoverVariants ? `<span class="card-variant-info" title="Esta edição possui capas variantes">Capa variante</span>` : ""}</div>
+          <div class="card-actions"><button class="card-like ${state.comicLikeIds.has(item.id) ? "is-liked" : ""}" data-like-item="${escapeHTML(item.id)}" title="Curtir quadrinho">${state.comicLikeIds.has(item.id) ? "♥" : "♡"} ${state.comicLikeCounts.get(item.id) || 0}</button><button class="card-share" data-share-item="${escapeHTML(item.id)}" title="Compartilhar quadrinho">Compartilhar</button><button class="card-comment" data-comment-item="${escapeHTML(item.id)}" title="Ver comentários">Comentários</button>${item.seriesId ? `<button class="card-series" data-view-series="${escapeHTML(item.seriesId)}" title="Ver série">Série</button>` : ""}</div>
         </div>
       </article>`;
   }
@@ -3800,7 +3808,7 @@
         </div>
       </section>
       <div class="content">
-        ${rail("Mais lidos", mostClicked, "As edições que mais receberam cliques.", "Ver catálogo")}
+        ${rail("Mais lidos", mostClicked, "As edições que mais receberam cliques.", "Ver catálogo", true)}
         ${publisherPinnedRail}
         ${bestSeriesRail}
         ${featuredCollectionsRail}
@@ -4441,10 +4449,17 @@
 
   function renderSearch() {
     const q = state.search.trim().toLowerCase();
-    const results = uniqueCatalogItems(state.db.library.filter(x => {
+    const matchingEditions = uniqueCatalogItems(state.db.library.filter(x => {
       const hay = [x.title,x.seriesTitle,x.issue,x.author,x.publisher,x.imprint,x.character,x.description,...(x.tags||[])].join(" ").toLowerCase();
       return !q || hay.includes(q);
     }));
+    const seenSeries = new Set();
+    const results = matchingEditions.filter(item => {
+      if (!item.seriesId) return true;
+      if (seenSeries.has(item.seriesId)) return false;
+      seenSeries.add(item.seriesId);
+      return true;
+    });
     const initialOrder = ["0-9", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""), "#"];
     const initialFor = item => {
       const initial = String(item.seriesTitle || item.title || "").trim().charAt(0).toUpperCase();
@@ -4469,7 +4484,7 @@
             ${initialOrder.filter(initial => initials.has(initial)).map(initial => `
               <section class="search-initial">
                 <h4 class="search-initial-title">${initial}</h4>
-                <div class="results-grid">${initials.get(initial).sort((a, b) => (a.seriesTitle || a.title).localeCompare(b.seriesTitle || b.title, "pt-BR")).map(item => card(item)).join("")}</div>
+                <div class="results-grid">${initials.get(initial).sort((a, b) => (a.seriesTitle || a.title).localeCompare(b.seriesTitle || b.title, "pt-BR")).map(item => item.seriesId ? seriesCard(item) : card(item)).join("")}</div>
               </section>`).join("")}
           </section>`).join("")}
       </section>`).join("");
@@ -4920,6 +4935,10 @@
       const first = state.db.library.find(item => item.seriesId === seriesId);
       if (first) openSeriesSelection(first, seriesEditions(first));
     };
+    $$('[data-view-series]').forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      openSeriesById(el.dataset.viewSeries);
+    }));
     $$('.series-card[data-open-series]').forEach(el => el.addEventListener("click", event => {
       if (event.target.closest("button")) return;
       openSeriesById(el.dataset.openSeries);
@@ -5070,6 +5089,46 @@
     return clean.match(/\.(pdf|cbz|cbr|jpg|jpeg|png|webp|gif)$/)?.[1] || "auto";
   }
 
+  function openCoverVariantsAdmin() {
+    if (!sb || !["moderator", "admin"].includes(state.profile?.plan)) return;
+    const items = state.db.library.filter(item => item.type === "comic").sort((a, b) => itemDisplayTitle(a).localeCompare(itemDisplayTitle(b), "pt-BR"));
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal cover-variants-admin-modal"><div class="section-head"><div><h2>Capas variantes oficiais</h2><div class="section-subtitle">Cadastre capas hospedadas oficialmente pela DC para usuários Premium.</div></div><button class="small-btn" data-close>Fechar</button></div><form id="cover-variant-admin-form"><div class="field full"><label>Edição</label><select name="itemId" required>${items.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(itemDisplayTitle(item))}${item.issue ? ` — ${escapeHTML(item.issue)}` : ""}</option>`).join("")}</select></div><div class="form-grid"><div class="field"><label>Chave da variante</label><input name="variantKey" required pattern="[A-Za-z0-9_-]{1,80}" placeholder="ex.: variant-a"></div><div class="field"><label>Nome da variante</label><input name="label" required maxlength="80" placeholder="Capa variante A"></div></div><div class="field full"><label>URL oficial da capa</label><input name="coverUrl" type="url" required pattern="https://static\\.dc\\.com/.*" placeholder="https://static.dc.com/2025-01/...jpg"><small class="format-hint">A URL precisa começar com https://static.dc.com/.</small></div><div class="field full"><label>URL da página fonte (opcional)</label><input name="sourceUrl" type="url" placeholder="https://www.dc.com/comics/..."></div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar variante</button></div></form><div class="section-subtitle cover-variants-admin-list"></div></div>`;
+    $("#modal-root").appendChild(overlay);
+    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    const itemSelect = $("select[name=itemId]", overlay);
+    const list = $(".cover-variants-admin-list", overlay);
+    const refreshList = () => {
+      const variants = state.coverVariants.get(itemSelect.value) || [];
+      list.innerHTML = variants.length ? `<div class="section-subtitle">Variantes cadastradas</div>${variants.map(variant => `<div class="admin-cover-variant-row"><span><b>${escapeHTML(variant.label)}</b><small>${escapeHTML(variant.cover_url)}</small></span><button type="button" class="small-btn danger" data-delete-cover-variant="${escapeHTML(variant.item_id)}" data-delete-variant-key="${escapeHTML(variant.variant_key)}">Excluir</button></div>`).join("")}` : "Nenhuma variante cadastrada para esta edição.";
+      $$('[data-delete-cover-variant]', overlay).forEach(button => button.onclick = async () => {
+        const result = await sb.from("comic_cover_variants").delete().eq("item_id", button.dataset.deleteCoverVariant).eq("variant_key", button.dataset.deleteVariantKey);
+        if (result.error) return toast(result.error.message);
+        await loadCoverCatalog();
+        refreshList();
+        render();
+      });
+    };
+    itemSelect.addEventListener("change", refreshList);
+    refreshList();
+    $("#cover-variant-admin-form", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const coverUrl = String(form.get("coverUrl") || "").trim();
+      if (!/^https:\/\/static\.dc\.com\//i.test(coverUrl)) return toast("A capa precisa usar uma URL oficial da DC.");
+      const payload = { item_id: String(form.get("itemId")), variant_key: String(form.get("variantKey") || "").trim(), label: String(form.get("label") || "").trim(), cover_url: coverUrl, source_url: String(form.get("sourceUrl") || "").trim() || null, created_at: new Date().toISOString() };
+      const result = await sb.from("comic_cover_variants").upsert(payload, { onConflict: "item_id,variant_key" });
+      if (result.error) return toast(result.error.message);
+      await loadCoverCatalog();
+      event.currentTarget.reset();
+      itemSelect.value = payload.item_id;
+      refreshList();
+      render();
+      toast("Capa variante cadastrada.");
+    };
+  }
+
   function openAdmin(editId = null) {
     const existing = editId ? state.db.library.find(x => x.id === editId) : null;
     const overlay = document.createElement("div");
@@ -5087,6 +5146,7 @@
 
         <div class="admin-actions" style="margin-bottom:15px">
           <button class="btn btn-danger" data-new>+ Nova edição</button>
+          <button class="small-btn" data-cover-variants>Capas variantes</button>
           <button class="small-btn" data-export>Exportar catálogo</button>
           <button class="small-btn" data-import>Importar catálogo</button>
           <button class="small-btn" data-reset>Restaurar exemplo</button>
@@ -5111,6 +5171,7 @@
     $("#modal-root").appendChild(overlay);
 
     $("[data-close]", overlay).onclick = () => overlay.remove();
+    $("[data-cover-variants]", overlay).onclick = () => { overlay.remove(); openCoverVariantsAdmin(); };
     $("[data-new]", overlay).onclick = () => { overlay.remove(); openEditForm(); };
     $("[data-export]", overlay).onclick = exportDB;
     $("[data-import]", overlay).onclick = importDB;
