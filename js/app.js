@@ -130,11 +130,19 @@
           const defaultsById = new Map((window.DEFAULT_LIBRARY || []).map(item => [item.id, item]));
           const previousLibrary = saved.library;
           saved.library = materializeSeriesItems(saved.library.map(item => ({ ...(defaultsById.get(item.id) || {}), ...item })));
+          const hadStargirlAdvertisement = saved.library.some(item => item.id === "series-stargirl-lost-children-2022-03");
+          saved.library = saved.library.filter(item => item.id !== "series-stargirl-lost-children-2022-03");
+          if (hadStargirlAdvertisement) {
+            saved.collections = saved.collections.map(collection => ({
+              ...collection,
+              issueIds: (collection.issueIds || []).filter(id => id !== "series-stargirl-lost-children-2022-03")
+            }));
+          }
           const knightVolumesChanged = saved.library.some(item => {
             const previous = previousLibrary.find(entry => entry.id === item.id);
             return previous && (previous.volume !== item.volume || previous.volumeTitle !== item.volumeTitle);
           });
-          if (knightVolumesChanged) this.save(saved);
+          if (knightVolumesChanged || hadStargirlAdvertisement) this.save(saved);
           if (saved.library.some(item => item.id === "series-justice-godzilla-kong-2023-08" && String(item.fileUrl || "").includes("bpk2XxWKhFNO9s"))) this.save(saved);
           const knownIds = new Set(saved.library.map(item => item.id));
           const newDefaults = materializeSeriesItems(structuredClone(window.DEFAULT_LIBRARY)).filter(item => !knownIds.has(item.id));
