@@ -1,5 +1,11 @@
 [functions.mediafire-proxy]
 verify_jwt = false
 
+[functions.image-proxy]
+verify_jwt = false
+
+[functions.mega-proxy]
+verify_jwt = false
+
 [functions.github-catalog]
 verify_jwt = true

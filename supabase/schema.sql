@@ -253,6 +253,13 @@ create table if not exists public.reading_progress (
   primary key (user_id, item_id)
 );
 
+create table if not exists public.comic_read_counts (
+  item_id text primary key,
+  clicks bigint not null default 0 check (clicks >= 0),
+  updated_at timestamptz not null default now()
+);
+create index if not exists comic_read_counts_clicks_idx on public.comic_read_counts(clicks desc);
+
 create table if not exists public.shelf_collection_likes (
   owner_id uuid not null references public.profiles(id) on delete cascade,
   collection_id text not null,
@@ -575,6 +582,7 @@ alter table public.chat_rooms enable row level security;
 alter table public.favorites enable row level security;
 alter table public.comic_likes enable row level security;
 alter table public.reading_progress enable row level security;
+alter table public.comic_read_counts enable row level security;
 alter table public.shelf_collections enable row level security;
 alter table public.shelf_collection_likes enable row level security;
 alter table public.comments enable row level security;
@@ -615,6 +623,7 @@ drop policy if exists "comic likes are public" on public.comic_likes;
 drop policy if exists "users manage own comic likes" on public.comic_likes;
 drop policy if exists "reading progress is public" on public.reading_progress;
 drop policy if exists "users manage own reading progress" on public.reading_progress;
+drop policy if exists "comic read counts are public" on public.comic_read_counts;
 drop policy if exists "public collections are visible" on public.shelf_collections;
 drop policy if exists "owners manage collections" on public.shelf_collections;
 drop policy if exists "moderators feature collections" on public.shelf_collections;
@@ -683,6 +692,32 @@ create policy "comic likes are public" on public.comic_likes for select using (
 create policy "users manage own comic likes" on public.comic_likes for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "reading progress is public" on public.reading_progress for select using (true);
 create policy "users manage own reading progress" on public.reading_progress for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "comic read counts are public" on public.comic_read_counts for select using (true);
+
+create or replace function public.increment_comic_read(p_item_id text)
+returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_clicks bigint;
+begin
+  if p_item_id is null or length(trim(p_item_id)) = 0 or length(p_item_id) > 200 then
+    raise exception 'Invalid comic item id';
+  end if;
+
+  insert into public.comic_read_counts (item_id, clicks, updated_at)
+  values (p_item_id, 1, now())
+  on conflict (item_id) do update
+    set clicks = public.comic_read_counts.clicks + 1,
+        updated_at = now()
+  returning clicks into v_clicks;
+
+  return v_clicks;
+end;
+$$;
+grant execute on function public.increment_comic_read(text) to anon, authenticated;
 create policy "public collections are visible" on public.shelf_collections for select using (is_public or auth.uid() = owner_id);
 create policy "owners manage collections" on public.shelf_collections for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "moderators feature collections" on public.shelf_collections for update using (public.is_moderator()) with check (public.is_moderator());

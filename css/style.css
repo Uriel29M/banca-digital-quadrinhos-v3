@@ -661,6 +661,10 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .admin-collection-list > div { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: var(--surface); border-radius: 8px; }
 .admin-collection-list span { color: var(--muted); font-size: 12px; margin-right: auto; }
 .series-modal { max-width: 980px; }
+.series-volume-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 18px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.series-volume-tabs .small-btn.is-active { background: var(--accent); color: white; border-color: var(--accent); }
+.series-volume-panel[hidden] { display: none; }
+.series-volume-heading { margin: 0 0 10px; color: var(--text); font-weight: 700; }
 .auth-page { min-height: 55vh; display: grid; place-items: center; }
 .auth-card { width: min(100%, 430px); padding: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
 .auth-card h1 { margin: 16px 0 14px; }

@@ -245,6 +245,38 @@
     ? window.supabase.createClient(window.BANCA_SUPABASE_URL, window.BANCA_SUPABASE_KEY)
     : null;
 
+  async function loadComicReadCounts() {
+    if (!sb) return;
+    const result = await sb.from("comic_read_counts").select("item_id, clicks");
+    if (result.error) {
+      console.warn("NÃ£o foi possÃ­vel carregar as quantidades de leitura:", result.error.message);
+      return;
+    }
+    const counts = new Map((result.data || []).map(row => [String(row.item_id), Number(row.clicks) || 0]));
+    state.db.library.forEach(item => {
+      item.clicks = counts.get(String(item.id)) || 0;
+    });
+  }
+
+  async function recordComicRead(item) {
+    if (!item || item.local || !item.id) return;
+    if (!sb) {
+      item.clicks = (Number(item.clicks) || 0) + 1;
+      save();
+      return;
+    }
+    const result = await sb.rpc("increment_comic_read", { p_item_id: String(item.id) });
+    if (result.error) {
+      console.warn("NÃ£o foi possÃ­vel registrar a leitura:", result.error.message);
+      return;
+    }
+    item.clicks = Number(result.data) || 0;
+    $$('[data-open]').filter(element => element.dataset.open === item.id).forEach(cardElement => {
+      const stats = $(".card-stats", cardElement);
+      if (stats) stats.textContent = `♥ ${item.clicks.toLocaleString("pt-BR")} leituras`;
+    });
+  }
+
   async function publishCatalog() {
     if (!sb || state.profile?.plan !== "admin") return { skipped: true };
     const result = await sb.functions.invoke("github-catalog", {
@@ -1698,10 +1730,7 @@
     activeReaderCleanup?.();
     activeReaderCleanup = null;
 
-    if (!item.local) {
-      item.clicks = (Number(item.clicks) || 0) + 1;
-      save();
-    }
+    recordComicRead(item);
     const isTelegramLink = (url) => /^https?:\/\/(www\.)?t(elegram)?\.me\//.test(url || "");
 
     // A URL direta (fileUrl) tem prioridade. Se não houver, usamos a 'telegramUrl'
@@ -2516,18 +2545,18 @@
       const downloadUrl = proxiedFileUrl(url);
       console.log("[CBR] URL usada no fetch:", downloadUrl);
 
-      const response = await fetch(downloadUrl, {
-        method: "GET",
-        mode: "cors",
-        credentials: "omit",
-        cache: "default"
-      });
-
-      console.log("[CBR] HTTP:", response.status);
-      console.log("[CBR] Content-Type:", response.headers.get("content-type") || "desconhecido");
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      const isMegaSource = /^https:\/\/(?:www\.)?mega\.nz\/file\//i.test(String(url || ""));
+      let response = null;
+      if (!isMegaSource) {
+        response = await fetch(downloadUrl, {
+          method: "GET",
+          mode: "cors",
+          credentials: "omit",
+          cache: "default"
+        });
+        console.log("[CBR] HTTP:", response.status);
+        console.log("[CBR] Content-Type:", response.headers.get("content-type") || "desconhecido");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
       }
 
       // =========================================================
@@ -2536,12 +2565,18 @@
 
       status("Lendo arquivo CBR…");
 
-      const totalBytes = Number(response.headers.get("content-length")) || 0;
+      const totalBytes = Number(response?.headers.get("content-length")) || 0;
       const formatCbrBytes = bytes => bytes >= 1024 * 1024
         ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
         : `${Math.round(bytes / 1024)} KB`;
       let buffer;
-      if (response.body?.getReader) {
+      if (isMegaSource) {
+        buffer = await fetchFileArrayBuffer(url, (received, total) => {
+          const value = total ? (received / total) * 100 : null;
+          showCbrProgress("Lendo arquivo CBR…", value, total ? `${formatCbrBytes(received)} de ${formatCbrBytes(total)}` : formatCbrBytes(received));
+        });
+        console.log("[CBR] Mega baixado em partes:", buffer.byteLength, "bytes");
+      } else if (response.body?.getReader) {
         const reader = response.body.getReader();
         const chunks = [];
         let receivedBytes = 0;
@@ -3243,9 +3278,9 @@
   function coverFor(item, variant = "card") {
     // A capa local aparece imediatamente; a capa real substitui-a quando terminar de carregar.
     if (!item) return instantCover({ title: "HQ" });
-    if (variant === "hero" && item.featuredCoverUrl) return item.featuredCoverUrl;
-    if (item.coverUrl) return item.coverUrl;
-    if (item.cover) return item.cover; // backward compatibility
+    if (variant === "hero" && item.featuredCoverUrl) return proxiedImageUrl(item.featuredCoverUrl);
+    if (item.coverUrl) return proxiedImageUrl(item.coverUrl);
+    if (item.cover) return proxiedImageUrl(item.cover); // backward compatibility
     return instantCover(item);
   }
 
@@ -3268,8 +3303,59 @@
       host === "www.mediafire.com" ||
       /^download\d+\.mediafire\.com$/.test(host)
     );
-    if (!isMediaFire || !window.BANCA_SUPABASE_URL) return source;
-    const proxy = new URL(`${window.BANCA_SUPABASE_URL}/functions/v1/mediafire-proxy`);
+    const isMega = parsed.protocol === "https:" && (host === "mega.nz" || host === "www.mega.nz") && parsed.pathname.startsWith("/file/");
+    if ((!isMediaFire && !isMega) || !window.BANCA_SUPABASE_URL) return source;
+    const proxy = new URL(`${window.BANCA_SUPABASE_URL}/functions/v1/${isMega ? "mega-proxy" : "mediafire-proxy"}`);
+    proxy.searchParams.set("url", source);
+    return proxy.toString();
+  }
+
+  async function fetchFileArrayBuffer(url, onProgress = () => {}) {
+    const source = String(url || "");
+    const isMega = /^https:\/\/(?:www\.)?mega\.nz\/file\//i.test(source);
+    if (!isMega) {
+      const response = await fetch(proxiedFileUrl(source), { mode: "cors", credentials: "omit", cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.arrayBuffer();
+    }
+
+    const chunkSize = 4 * 1024 * 1024;
+    const chunks = [];
+    let total = 0;
+    let received = 0;
+    let start = 0;
+    while (start < total || start === 0) {
+      const end = start + chunkSize - 1;
+      const proxy = new URL(proxiedFileUrl(source));
+      const response = await fetch(proxy, {
+        headers: { Range: `bytes=${start}-${end}` },
+        mode: "cors",
+        credentials: "omit",
+        cache: "no-store"
+      });
+      if (!(response.ok || response.status === 206)) throw new Error(`HTTP ${response.status}`);
+      const part = new Uint8Array(await response.arrayBuffer());
+      const contentRange = response.headers.get("content-range") || "";
+      const match = contentRange.match(/bytes\s+(\d+)-(\d+)\/(\d+)/i);
+      if (match) total = Number(match[3]);
+      if (!part.byteLength) throw new Error("O Mega retornou um bloco vazio.");
+      chunks.push(part);
+      received += part.byteLength;
+      onProgress(received, total);
+      if (!total || part.byteLength < chunkSize) break;
+      start += part.byteLength;
+    }
+    const bytes = new Uint8Array(received);
+    let offset = 0;
+    chunks.forEach(chunk => { bytes.set(chunk, offset); offset += chunk.byteLength; });
+    if (total && received !== total) throw new Error(`Download incompleto: ${received} de ${total} bytes.`);
+    return bytes.buffer;
+  }
+
+  function proxiedImageUrl(url) {
+    const source = String(url || "");
+    if (!window.BANCA_SUPABASE_URL || !/^https:\/\/(?:i\.imgur\.com|(?:www\.)?imgur\.com)\//i.test(source)) return source;
+    const proxy = new URL(`${window.BANCA_SUPABASE_URL}/functions/v1/image-proxy`);
     proxy.searchParams.set("url", source);
     return proxy.toString();
   }
@@ -3362,10 +3448,15 @@
     if (cached) localStorage.removeItem(cacheKey);
     const format = (item.format || extension(url)).toLowerCase();
     let cover;
-    if (format === "pdf" || /\.pdf(?:[?#]|$)/i.test(url)) cover = await pdfCover(url, signal, maxWidth);
-    else if (format === "cbz" || /\.cbz(?:[?#]|$)/i.test(url)) cover = await cbzCover(url, signal, maxWidth);
-    else if (format === "cbr" || /\.cbr(?:[?#]|$)/i.test(url)) cover = await cbrCover(url, signal, maxWidth);
-    else if (/^(jpg|jpeg|png|webp|gif)$/i.test(format)) cover = url;
+    try {
+      if (format === "pdf" || /\.pdf(?:[?#]|$)/i.test(url)) cover = await pdfCover(url, signal, maxWidth);
+      else if (format === "cbz" || /\.cbz(?:[?#]|$)/i.test(url)) cover = await cbzCover(url, signal, maxWidth);
+      else if (format === "cbr" || /\.cbr(?:[?#]|$)/i.test(url)) cover = await cbrCover(url, signal, maxWidth);
+      else if (/^(jpg|jpeg|png|webp|gif)$/i.test(format)) cover = url;
+    } catch (error) {
+      if (!signal?.aborted) coverMemoryCache.set(cacheId, null);
+      return null;
+    }
     if (cover) {
       coverMemoryCache.set(cacheId, cover);
       try { localStorage.setItem(cacheKey, cover); } catch {}
@@ -3386,7 +3477,7 @@
       const isHero = element.classList.contains("hero-bg") || element.classList.contains("hero-cover");
       const maxWidth = isHero ? 1200 : 480;
       const cacheId = `${item.id}:${maxWidth}`;
-      const job = autoCover(item, controller.signal, maxWidth);
+      const job = coverLoading.get(cacheId) || autoCover(item, controller.signal, maxWidth);
       coverLoading.set(cacheId, job);
       job.then(cover => {
         if (!cover) return;
@@ -3394,12 +3485,15 @@
       }).catch(error => { element.dataset.coverReady = ""; console.warn("Não foi possível gerar a capa de", item.title, error); })
         .finally(() => coverLoading.delete(cacheId));
     };
-    const observer = "IntersectionObserver" in window ? new IntersectionObserver(entries => entries.forEach(entry => { if (entry.isIntersecting) { load(entry.target); observer.unobserve(entry.target); } }), { rootMargin: "500px" }) : null;
-    elements.forEach(element => {
-      if (element.classList.contains("hero-bg")) load(element);
-      else if (observer) observer.observe(element);
-      else load(element);
-    });
+    const priority = elements.filter(element => element.classList.contains("hero-bg"));
+    const deferred = elements.filter(element => !element.classList.contains("hero-bg"));
+    const observeDeferred = () => {
+      const observer = "IntersectionObserver" in window ? new IntersectionObserver(entries => entries.forEach(entry => { if (entry.isIntersecting) { load(entry.target); observer.unobserve(entry.target); } }), { rootMargin: "500px" }) : null;
+      deferred.forEach(element => observer ? observer.observe(element) : load(element));
+    };
+    const priorityJobs = priority.map(load).filter(Boolean);
+    if (priorityJobs.length) Promise.allSettled(priorityJobs).then(observeDeferred);
+    else observeDeferred();
   }
 
   function card(item, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, directOpen = false) {
@@ -3445,7 +3539,7 @@
   function itemIssueLabel(item) {
     const issue = String(item?.issue || "").trim();
     if (!item?.seriesId || !issue || !/^\d+(?:\.\d+)?$/.test(issue)) return issue;
-    const availableTotal = state.db.library.filter(entry => entry.seriesId === item.seriesId).length;
+    const availableTotal = state.db.library.filter(entry => entry.seriesId === item.seriesId && (!item.volume || entry.volume === item.volume)).length;
     return availableTotal > 1 ? `${issue}/${availableTotal}` : issue;
   }
 
@@ -4644,13 +4738,24 @@
   function openSeriesSelection(series, editions) {
     const overlay = document.createElement("div");
     overlay.className = "modal-backdrop";
+    const volumeGroups = new Map();
+    editions.slice().sort((a, b) => issueSortValue(a) - issueSortValue(b)).forEach(item => {
+      const label = item.volumeTitle || item.volume || "Edições";
+      if (!volumeGroups.has(label)) volumeGroups.set(label, []);
+      volumeGroups.get(label).push(item);
+    });
+    const volumeEntries = [...volumeGroups.entries()];
+    const volumeTabs = volumeEntries.length > 1
+      ? `<div class="series-volume-tabs">${volumeEntries.map(([label], index) => `<button class="small-btn ${index === 0 ? "is-active" : ""}" type="button" data-series-volume-tab="${index}">${escapeHTML(label)}</button>`).join("")}</div>`
+      : "";
+    const volumePanels = volumeEntries.map(([label, items], index) => `<div class="series-volume-panel" data-series-volume-panel="${index}" ${index ? "hidden" : ""}><div class="section-subtitle series-volume-heading">${escapeHTML(label)}</div><div class="results-grid">${items.map(item => card(item)).join("")}</div></div>`).join("");
     overlay.innerHTML = `
       <div class="modal series-modal">
         <div class="section-head">
           <div><div class="eyebrow">Série</div><h2>${escapeHTML(series.seriesTitle || series.title)}</h2><div class="section-subtitle">${editions.length} edições disponíveis</div></div>
           <button class="small-btn" data-close>Fechar</button>
         </div>
-        <div class="results-grid">${editions.slice().sort((a, b) => issueSortValue(a) - issueSortValue(b)).map(item => card(item)).join("")}</div>
+        ${volumeTabs}${volumePanels}
       </div>`;
     $("#modal-root").appendChild(overlay);
     hydrateHomeCovers();
@@ -4675,6 +4780,11 @@
       event.stopPropagation();
       const item = state.db.library.find(entry => entry.id === el.dataset.commentItem);
       if (item) openCommentsPopup(item);
+    }));
+    $$('[data-series-volume-tab]', overlay).forEach(tab => tab.addEventListener("click", () => {
+      const selected = tab.dataset.seriesVolumeTab;
+      $$('[data-series-volume-tab]', overlay).forEach(button => button.classList.toggle("is-active", button === tab));
+      $$('[data-series-volume-panel]', overlay).forEach(panel => { panel.hidden = panel.dataset.seriesVolumePanel !== selected; });
     }));
   }
 
@@ -5089,6 +5199,9 @@
   const warmLibarchive = () => loadLibarchiveModule().catch(error => console.warn("Biblioteca CBR indisponível:", error));
   if ("requestIdleCallback" in window) window.requestIdleCallback(warmLibarchive, { timeout: 4000 });
   else window.setTimeout(warmLibarchive, 2500);
+  loadComicReadCounts()
+    .then(() => { if (state.section !== "reader") render(); })
+    .catch(error => console.warn("Contadores de leitura indisponÃ­veis:", error));
   sb?.auth.onAuthStateChange((event, session) => {
     if (event === "PASSWORD_RECOVERY") {
       state.session = session;
