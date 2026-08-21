@@ -16,7 +16,9 @@ create table if not exists public.profiles (
 alter table public.profiles add column if not exists account_email text;
 alter table public.profiles add column if not exists title_color text default '#ffd45c';
 alter table public.profiles add column if not exists shelf_saved_public boolean not null default true;
+alter table public.profiles add column if not exists shelf_series_public boolean not null default true;
 alter table public.profiles add column if not exists shelf_read_public boolean not null default true;
+alter table public.profiles add column if not exists shelf_completed_public boolean not null default true;
 alter table public.profiles add column if not exists shelf_liked_public boolean not null default true;
 alter table public.profiles add column if not exists shelf_categories jsonb not null default '[]'::jsonb;
 alter table public.profiles add column if not exists profile_hidden boolean not null default false;
@@ -235,6 +237,49 @@ create table if not exists public.favorites (
   created_at timestamptz not null default now(),
   primary key (user_id, item_id)
 );
+
+-- Capas oficiais e preferência de capa dos usuários Premium.
+create table if not exists public.comic_cover_variants (
+  item_id text not null,
+  variant_key text not null,
+  label text not null check (char_length(label) between 1 and 80),
+  cover_url text not null check (cover_url ~ '^https://static[.]dc[.]com/'),
+  source_url text,
+  created_at timestamptz not null default now(),
+  primary key (item_id, variant_key)
+);
+
+create table if not exists public.user_cover_choices (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  item_id text not null,
+  variant_key text not null,
+  label text not null default 'Capa variante',
+  cover_url text not null check (cover_url ~ '^https://static[.]dc[.]com/'),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, item_id)
+);
+create index if not exists user_cover_choices_item_idx on public.user_cover_choices(item_id);
+
+create or replace function public.validate_user_cover_choice()
+returns trigger language plpgsql security definer set search_path = public
+as $$
+begin
+  if not exists (
+    select 1 from public.comic_cover_variants variant
+    where variant.item_id = new.item_id
+      and variant.variant_key = new.variant_key
+      and variant.cover_url = new.cover_url
+  ) then
+    raise exception 'Capa variante não cadastrada para esta edição';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists validate_user_cover_choice_trigger on public.user_cover_choices;
+create trigger validate_user_cover_choice_trigger
+before insert or update on public.user_cover_choices
+for each row execute procedure public.validate_user_cover_choice();
 
 create table if not exists public.comic_likes (
   user_id uuid not null references public.profiles(id) on delete cascade,
@@ -545,6 +590,10 @@ create or replace function public.can_comment()
 returns boolean language sql stable security definer set search_path = public
 as $$ select exists (select 1 from public.profiles where id = auth.uid() and not is_banned and (silenced_until is null or silenced_until <= now())) $$;
 
+create or replace function public.can_customize_covers()
+returns boolean language sql stable security definer set search_path = public
+as $$ select exists (select 1 from public.profiles where id = auth.uid() and plan in ('premium', 'moderator', 'admin')) $$;
+
 create policy "publisher covers are public" on storage.objects for select using (bucket_id = 'publisher-covers');
 create policy "moderators upload publisher covers" on storage.objects for insert with check (bucket_id = 'publisher-covers' and public.is_moderator() and auth.uid()::text = (storage.foldername(name))[1]);
 create policy "moderators update publisher covers" on storage.objects for update using (bucket_id = 'publisher-covers' and public.is_moderator() and auth.uid()::text = (storage.foldername(name))[1]);
@@ -580,6 +629,8 @@ alter table public.notifications enable row level security;
 alter table public.chat_messages enable row level security;
 alter table public.chat_rooms enable row level security;
 alter table public.favorites enable row level security;
+alter table public.comic_cover_variants enable row level security;
+alter table public.user_cover_choices enable row level security;
 alter table public.comic_likes enable row level security;
 alter table public.reading_progress enable row level security;
 alter table public.comic_read_counts enable row level security;
@@ -619,6 +670,10 @@ drop policy if exists "users update own profile" on public.profiles;
 drop policy if exists "users read own favorites" on public.favorites;
 drop policy if exists "favorites are public" on public.favorites;
 drop policy if exists "users manage own favorites" on public.favorites;
+drop policy if exists "cover variants are public" on public.comic_cover_variants;
+drop policy if exists "admins manage cover variants" on public.comic_cover_variants;
+drop policy if exists "cover choices are public" on public.user_cover_choices;
+drop policy if exists "premium users manage own cover choices" on public.user_cover_choices;
 drop policy if exists "comic likes are public" on public.comic_likes;
 drop policy if exists "users manage own comic likes" on public.comic_likes;
 drop policy if exists "reading progress is public" on public.reading_progress;
@@ -686,6 +741,10 @@ create policy "favorites are public" on public.favorites for select using (
   auth.uid() = user_id or exists (select 1 from public.profiles where id = user_id and likes_public)
 );
 create policy "users manage own favorites" on public.favorites for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "cover variants are public" on public.comic_cover_variants for select using (true);
+create policy "admins manage cover variants" on public.comic_cover_variants for all using (public.is_admin()) with check (public.is_admin());
+create policy "cover choices are public" on public.user_cover_choices for select using (true);
+create policy "premium users manage own cover choices" on public.user_cover_choices for all using (auth.uid() = user_id and public.can_customize_covers()) with check (auth.uid() = user_id and public.can_customize_covers());
 create policy "comic likes are public" on public.comic_likes for select using (
   auth.uid() = user_id or exists (select 1 from public.profiles where id = user_id and likes_public)
 );
@@ -774,10 +833,10 @@ returns void language sql security invoker as $$ update public.profiles set last
 
 insert into public.achievements (achievement_key, name, description, icon) values
   ('first_read', 'Primeira leitura', 'Abriu seu primeiro quadrinho.', '📖'),
-  ('first_completed', 'Primeira conclusão', 'Concluiu seu primeiro quadrinho.', '🏁'),
+  ('first_completed', 'Primeira conclusão', 'Concluiu todas as edições de uma série.', '🏁'),
   ('first_favorite', 'Primeiro favorito', 'Salvou sua primeira edição na estante.', '★'),
   ('first_comment', 'Voz da banca', 'Publicou seu primeiro comentário.', '💬'),
-  ('five_completed', 'Maratona', 'Concluiu cinco quadrinhos.', '🏆')
+  ('five_completed', 'Maratona', 'Concluiu cinco séries.', '🏆')
 on conflict (achievement_key) do update set name = excluded.name, description = excluded.description, icon = excluded.icon;
 
 create or replace function public.award_achievement(p_key text)

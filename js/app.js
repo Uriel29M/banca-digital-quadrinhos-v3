@@ -116,6 +116,16 @@
       try {
         const saved = JSON.parse(localStorage.getItem(DB_KEY));
         if (saved?.library && saved?.collections) {
+          const removedItemIds = new Set([
+            ...(window.REMOVED_DEFAULT_ITEM_IDS || []),
+            ...(Array.isArray(saved.removedItemIds) ? saved.removedItemIds : [])
+          ]);
+          const hadRemovedItems = saved.library.some(item => removedItemIds.has(item.id));
+          saved.library = saved.library.filter(item => !removedItemIds.has(item.id));
+          saved.collections = saved.collections.map(collection => ({
+            ...collection,
+            issueIds: (collection.issueIds || []).filter(id => !removedItemIds.has(id))
+          }));
           const oldAbsolutePowerIds = new Map([
             ["series-absolute-power-2024-02", "series-absolute-power-2024-01"],
             ["series-absolute-power-2024-03", "series-absolute-power-2024-02"],
@@ -145,20 +155,28 @@
           if (knightVolumesChanged || hadStargirlAdvertisement) this.save(saved);
           if (saved.library.some(item => item.id === "series-justice-godzilla-kong-2023-08" && String(item.fileUrl || "").includes("bpk2XxWKhFNO9s"))) this.save(saved);
           const knownIds = new Set(saved.library.map(item => item.id));
-          const newDefaults = materializeSeriesItems(structuredClone(window.DEFAULT_LIBRARY)).filter(item => !knownIds.has(item.id));
+          const newDefaults = materializeSeriesItems(structuredClone(window.DEFAULT_LIBRARY)).filter(item => !knownIds.has(item.id) && !removedItemIds.has(item.id));
           if (newDefaults.length) {
             const merged = { ...saved, library: [...saved.library, ...newDefaults] };
             this.save(merged);
             return merged;
           }
+          if (hadRemovedItems) this.save(saved);
           return saved;
         }
       } catch {}
       const fresh = {
         library: structuredClone(window.DEFAULT_LIBRARY),
         collections: structuredClone(window.DEFAULT_COLLECTIONS),
-        submissions: []
+        submissions: [],
+        removedItemIds: []
       };
+      const removedItemIds = new Set(window.REMOVED_DEFAULT_ITEM_IDS || []);
+      fresh.library = fresh.library.filter(item => !removedItemIds.has(item.id));
+      fresh.collections = fresh.collections.map(collection => ({
+        ...collection,
+        issueIds: (collection.issueIds || []).filter(id => !removedItemIds.has(id))
+      }));
       fresh.library = materializeSeriesItems(fresh.library);
       this.save(fresh);
       return fresh;
@@ -195,6 +213,8 @@
     authReady: false,
     profile: null,
     favoriteIds: new Set(),
+    coverVariants: new Map(),
+    coverChoices: new Map(),
     readingProgress: new Map(),
     shelfSnapshot: null,
     shelfExpanded: { saved: false, read: false },
@@ -863,6 +883,29 @@
     return `${url.pathname}?${url.searchParams.toString()}`;
   }
 
+  async function loadCoverCatalog() {
+    if (!sb) return;
+    const result = await sb.from("comic_cover_variants").select("item_id, variant_key, label, cover_url, source_url").order("label", { ascending: true });
+    if (result.error) {
+      state.coverVariants = new Map();
+      return;
+    }
+    state.coverVariants = (result.data || []).reduce((map, variant) => {
+      if (!map.has(variant.item_id)) map.set(variant.item_id, []);
+      map.get(variant.item_id).push(variant);
+      return map;
+    }, new Map());
+  }
+
+  async function loadCoverChoices(userId) {
+    if (!sb || !userId) {
+      state.coverChoices = new Map();
+      return;
+    }
+    const result = await sb.from("user_cover_choices").select("item_id, variant_key, label, cover_url").eq("user_id", userId);
+    state.coverChoices = result.error ? new Map() : new Map((result.data || []).map(choice => [choice.item_id, choice]));
+  }
+
   async function loadAccount() {
     if (!sb) {
       state.authReady = true;
@@ -871,6 +914,8 @@
     }
     const { data: { session } } = await sb.auth.getSession();
     state.session = session;
+    await loadCoverCatalog();
+    await loadCoverChoices(session?.user?.id);
     const publisherSettings = await sb.from("publisher_settings").select("publisher_key, publisher_name, cover_url, is_pinned");
     state.publisherSettings = new Map((publisherSettings.data || []).map(setting => [setting.publisher_key, setting]));
     const publicCollectionsResult = await sb.from("shelf_collections").select("id, owner_id, name, cover_url, item_ids, blog_ids, collection_type, is_featured").eq("is_public", true).limit(50);
@@ -998,7 +1043,7 @@
       render();
       return;
     }
-    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_read_public, shelf_liked_public, shelf_blogs_public, profile_hidden, is_banned, silenced_until").ilike("username", username).maybeSingle();
+    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_series_public, shelf_read_public, shelf_completed_public, shelf_liked_public, shelf_blogs_public, profile_hidden, is_banned, silenced_until").ilike("username", username).maybeSingle();
     if (profile.error) {
       profile = await sb.from("profiles").select("id, username, avatar_url, title, plan").ilike("username", username).maybeSingle();
     }
@@ -1030,6 +1075,10 @@
     const actorNames = new Map((actors.data || []).map(actor => [actor.id, actor.username]));
     const collectionLikes = new Set((likes.data || []).filter(row => row.user_id === state.session?.user?.id).map(row => row.collection_id));
     const collectionLikeCounts = (likes.data || []).reduce((counts, row) => counts.set(row.collection_id, (counts.get(row.collection_id) || 0) + 1), new Map());
+    const publicCoverChoicesResult = ["premium", "moderator", "admin"].includes(profile.data.plan)
+      ? await sb.from("user_cover_choices").select("item_id, variant_key, label, cover_url").eq("user_id", profile.data.id)
+      : { data: [] };
+    const publicCoverChoices = new Map((publicCoverChoicesResult.data || []).map(choice => [choice.item_id, choice]));
     state.publicProfile = {
       profile: profile.data,
       collectionId,
@@ -1043,7 +1092,8 @@
       readingProgress: new Map((progress.data || []).map(row => [row.item_id, row])),
       achievements: (achievements.data || []).map(row => row.achievements).filter(Boolean),
       collectionLikes,
-      collectionLikeCounts
+      collectionLikeCounts,
+      coverChoices: publicCoverChoices
       ,moderationHistory: (moderationHistory.data || []).map(entry => ({ ...entry, actor_username: actorNames.get(entry.actor_id) || "moderador" }))
       ,isFollowing
       ,followerCount: (followers.data || []).length
@@ -1113,6 +1163,52 @@
     }
     updateFavoriteButtons(itemId);
     render();
+  }
+
+  async function toggleSeriesFavorite(seriesId) {
+    if (!state.session) return openAuthPage();
+    const saved = state.favoriteIds.has(seriesId);
+    const result = saved
+      ? await sb.from("favorites").delete().eq("user_id", state.session.user.id).eq("item_id", seriesId)
+      : await sb.from("favorites").insert({ user_id: state.session.user.id, item_id: seriesId });
+    if (result.error) return toast("Não foi possível atualizar as séries salvas.");
+    if (saved) state.favoriteIds.delete(seriesId);
+    else { state.favoriteIds.add(seriesId); rememberShelfItem("saved", seriesId); awardAchievement("first_favorite"); }
+    render();
+  }
+
+  function openCoverChoice(itemId) {
+    if (!state.session) return openAuthPage();
+    if (!["premium", "moderator", "admin"].includes(state.profile?.plan)) return toast("A escolha de capas variantes é exclusiva para usuários Premium, moderadores e administradores.");
+    if (!state.favoriteIds.has(itemId)) return toast("Salve o quadrinho na estante antes de escolher uma capa.");
+    const item = state.db.library.find(entry => entry.id === itemId);
+    if (!item) return;
+    const current = state.coverChoices.get(itemId);
+    const variants = state.coverVariants.get(itemId) || [];
+    const options = [{ variant_key: "__default", label: "Capa principal", cover_url: item.coverUrl || "" }, ...variants];
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal cover-choice-modal"><div class="section-head"><div><h2>Escolher capa</h2><div class="section-subtitle">${escapeHTML(itemDisplayTitle(item))}</div></div><button class="small-btn" data-close>Fechar</button></div><form id="cover-choice-form"><div class="cover-choice-options">${options.map(option => `<label class="cover-choice-option"><input type="radio" name="variantKey" value="${escapeHTML(option.variant_key)}" ${current?.variant_key === option.variant_key || (!current && option.variant_key === "__default") ? "checked" : ""}><img src="${escapeHTML(proxiedImageUrl(option.cover_url))}" alt=""><span>${escapeHTML(option.label)}</span></label>`).join("")}</div>${variants.length ? "" : '<div class="empty">Nenhuma capa variante foi cadastrada para esta edição.</div>'}<div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar capa</button></div></form></div>`;
+    $("#modal-root").appendChild(overlay);
+    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $("#cover-choice-form", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const selectedKey = String(form.get("variantKey") || "__default");
+      let choice = variants.find(option => option.variant_key === selectedKey);
+      if (selectedKey === "__default") {
+        const result = await sb.from("user_cover_choices").delete().eq("user_id", state.session.user.id).eq("item_id", itemId);
+        if (result.error) return toast(result.error.message);
+        state.coverChoices.delete(itemId);
+      } else if (choice) {
+        const result = await sb.from("user_cover_choices").upsert({ user_id: state.session.user.id, item_id: itemId, variant_key: choice.variant_key, label: choice.label, cover_url: choice.cover_url, updated_at: new Date().toISOString() }, { onConflict: "user_id,item_id" });
+        if (result.error) return toast(result.error.message);
+        state.coverChoices.set(itemId, { item_id: itemId, ...choice });
+      } else return toast("Essa capa variante não está cadastrada para esta edição.");
+      overlay.remove();
+      render();
+      toast("Capa atualizada.");
+    };
   }
 
   function updateFavoriteButtons(itemId) {
@@ -1185,13 +1281,27 @@
     return progressMap?.get(item?.id) || null;
   }
 
+  function isSeriesCompleted(item, progressMap = state.readingProgress) {
+    const editions = seriesEditions(item);
+    return Boolean(item?.seriesId && editions.length > 0 && editions.every(edition => progressMap?.get(edition.id)?.completed));
+  }
+
+  function completedSeriesItems(progressMap = state.readingProgress) {
+    const seen = new Set();
+    return state.db.library.filter(item => {
+      if (!item.seriesId || seen.has(item.seriesId)) return false;
+      seen.add(item.seriesId);
+      return isSeriesCompleted(item, progressMap);
+    });
+  }
+
   function updateCompletionCards(item, completed) {
     $$('[data-open]').filter(element => element.dataset.open === item?.id).forEach(cardElement => {
       const existing = $(".card-completed", cardElement);
       if (completed && !existing) {
         const status = document.createElement("div");
         status.className = "card-completed";
-        status.textContent = "✓ Concluída";
+        status.textContent = "✓ Lida";
         cardElement.querySelector(".card-body")?.before(status);
       } else if (!completed && existing) {
         existing.remove();
@@ -1209,7 +1319,7 @@
     $("[data-toggle-read]")?.replaceChildren(document.createTextNode(completed ? "Desmarcar como lida" : "Marcar como lida"));
     updateCompletionCards(item, completed);
     awardAchievement("first_read");
-    if (completed) { awardAchievement("first_completed"); awardAchievement("five_completed"); }
+    if (isSeriesCompleted(item)) { awardAchievement("first_completed"); awardAchievement("five_completed"); }
     const result = await sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
     if (result.error) console.warn("Não foi possível salvar o progresso de leitura:", result.error.message);
   }
@@ -1221,6 +1331,7 @@
     state.readingProgress.set(item.id, row);
     if (row.completed) rememberShelfItem("read", item.id);
     updateCompletionCards(item, row.completed);
+    if (row.completed && isSeriesCompleted(item)) { awardAchievement("first_completed"); awardAchievement("five_completed"); }
     const result = sb.from("reading_progress").upsert(row, { onConflict: "user_id,item_id" });
     result.then(response => { if (response.error) console.warn("Não foi possível atualizar o status de leitura:", response.error.message); });
   }
@@ -1330,6 +1441,7 @@
             <button class="btn btn-danger" type="submit">Enviar link</button>
           </div>
           <div class="auth-message" id="recovery-message"></div>
+        </form>
         </form>
       </div>`;
     $("#modal-root").appendChild(overlay);
@@ -1722,19 +1834,22 @@
   function openProfileSettings() {
     if (!state.session) return openAuthPage();
     const overlay = document.createElement("div"); overlay.className = "modal-backdrop";
-    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Meu perfil</h2><div class="section-subtitle">Personalize seu @, sua foto e a visibilidade da estante</div></div><button class="small-btn" data-close>Fechar</button></div><form id="profile-form"><div class="form-grid"><div class="field full"><label>@usuário</label><input name="username" pattern="[A-Za-z0-9_]{3,24}" required value="${escapeHTML(state.profile?.username || "")}"></div><div class="field full"><label>Foto de perfil</label><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></div>${["admin", "moderator", "premium"].includes(state.profile?.plan) ? `<div class="field full"><label>Visibilidade no perfil público</label><label class="checkbox-inline"><input name="shelfSavedPublic" type="checkbox" ${state.profile?.shelf_saved_public !== false ? "checked" : ""}> Mostrar coleção Salvos</label><label class="checkbox-inline"><input name="shelfReadPublic" type="checkbox" ${state.profile?.shelf_read_public !== false ? "checked" : ""}> Mostrar coleção Lidos</label></div>` : ""}</div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar perfil</button></div></form></div>`;
+    overlay.innerHTML = `<div class="modal"><div class="section-head"><div><h2>Meu perfil</h2><div class="section-subtitle">Personalize seu @, sua foto e a visibilidade da estante</div></div><button class="small-btn" data-close>Fechar</button></div><form id="profile-form"><div class="form-grid"><div class="field full"><label>@usuário</label><input name="username" pattern="[A-Za-z0-9_]{3,24}" required value="${escapeHTML(state.profile?.username || "")}"></div><div class="field full"><label>Foto de perfil</label><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></div>${["admin", "moderator", "premium"].includes(state.profile?.plan) ? `<div class="field full"><label>Visibilidade no perfil público</label><label class="checkbox-inline"><input name="shelfSavedPublic" type="checkbox" ${state.profile?.shelf_saved_public !== false ? "checked" : ""}> Mostrar coleção Salvos</label><label class="checkbox-inline"><input name="shelfSeriesPublic" type="checkbox" ${state.profile?.shelf_series_public !== false ? "checked" : ""}> Mostrar coleção Séries salvas</label><label class="checkbox-inline"><input name="shelfReadPublic" type="checkbox" ${state.profile?.shelf_read_public !== false ? "checked" : ""}> Mostrar coleção Lidos</label></div>` : ""}</div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar perfil</button></div></form></div>`;
     $("#modal-root").appendChild(overlay); $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
     const profileForm = $("#profile-form", overlay);
+    if (!["admin", "moderator", "premium"].includes(state.profile?.plan)) $(".form-grid", overlay)?.insertAdjacentHTML("beforeend", `<div class="field full"><label class="checkbox-inline"><input name="shelfSeriesPublic" type="checkbox" ${state.profile?.shelf_series_public !== false ? "checked" : ""}> Mostrar coleção Séries salvas no perfil público</label></div>`);
     const shelfVisibilityField = $$(".field.full", overlay).find(field => field.textContent.includes("Visibilidade"));
     if (["admin", "moderator", "premium"].includes(state.profile?.plan) && shelfVisibilityField) {
-      shelfVisibilityField.insertAdjacentHTML("beforeend", `<label class="checkbox-inline"><input name="shelfLikedPublic" type="checkbox" ${state.profile?.shelf_liked_public !== false ? "checked" : ""}> Mostrar coleção Curtidos</label><label class="checkbox-inline"><input name="shelfBlogsPublic" type="checkbox" ${state.profile?.shelf_blogs_public !== false ? "checked" : ""}> Mostrar coleção Blogs</label>`);
+      shelfVisibilityField.insertAdjacentHTML("beforeend", `<label class="checkbox-inline"><input name="shelfCompletedPublic" type="checkbox" ${state.profile?.shelf_completed_public !== false ? "checked" : ""}> Mostrar coleção Concluídos</label><label class="checkbox-inline"><input name="shelfLikedPublic" type="checkbox" ${state.profile?.shelf_liked_public !== false ? "checked" : ""}> Mostrar coleção Curtidos</label><label class="checkbox-inline"><input name="shelfBlogsPublic" type="checkbox" ${state.profile?.shelf_blogs_public !== false ? "checked" : ""}> Mostrar coleção Blogs</label>`);
     }
     profileForm.addEventListener("submit", async event => {
       if (!["admin", "moderator", "premium"].includes(state.profile?.plan)) return;
-      const likedVisibility = await sb.from("profiles").update({ shelf_liked_public: new FormData(event.currentTarget).get("shelfLikedPublic") === "on" }).eq("id", state.session.user.id);
+      const formData = new FormData(event.currentTarget);
+      const visibility = { shelf_completed_public: formData.get("shelfCompletedPublic") === "on", shelf_liked_public: formData.get("shelfLikedPublic") === "on" };
+      const likedVisibility = await sb.from("profiles").update(visibility).eq("id", state.session.user.id);
       if (likedVisibility.error) toast(likedVisibility.error.message);
       else {
-        state.profile = { ...state.profile, shelf_liked_public: new FormData(event.currentTarget).get("shelfLikedPublic") === "on" };
+        state.profile = { ...state.profile, ...visibility };
         render();
       }
     });
@@ -1758,7 +1873,7 @@
       state.profile = { ...state.profile, ...privacy };
       await originalProfileSubmit(event);
     };
-    $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const preferences = ["admin", "moderator", "premium"].includes(state.profile?.plan) ? { shelf_saved_public: fd.get("shelfSavedPublic") === "on", shelf_read_public: fd.get("shelfReadPublic") === "on", shelf_blogs_public: fd.get("shelfBlogsPublic") === "on" } : {}; const update = await sb.from("profiles").update({ username, avatar_url, ...preferences }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url, ...preferences }; overlay.remove(); render(); toast("Perfil atualizado."); };
+    $("#profile-form", overlay).onsubmit = async event => { event.preventDefault(); const fd = new FormData(event.currentTarget); const username = cleanUsername(fd.get("username")); if (!/^[a-z0-9_]{3,24}$/.test(username)) return toast("@ inválido."); let avatar_url = state.profile?.avatar_url || null; const file = fd.get("avatar"); if (file?.size) { const path = `${state.session.user.id}/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, "_")}`; const upload = await sb.storage.from("avatars").upload(path, file, { upsert: true }); if (upload.error) return toast(upload.error.message); avatar_url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const eligible = ["admin", "moderator", "premium"].includes(state.profile?.plan); const preferences = eligible ? { shelf_saved_public: fd.get("shelfSavedPublic") === "on", shelf_series_public: fd.get("shelfSeriesPublic") === "on", shelf_read_public: fd.get("shelfReadPublic") === "on", shelf_completed_public: fd.get("shelfCompletedPublic") === "on", shelf_blogs_public: fd.get("shelfBlogsPublic") === "on" } : { shelf_series_public: fd.get("shelfSeriesPublic") === "on" }; const update = await sb.from("profiles").update({ username, avatar_url, ...preferences }).eq("id", state.session.user.id); if (update.error) return toast(update.error.message.includes("duplicate") ? "Esse @ já está em uso." : update.error.message); state.profile = { ...state.profile, username, avatar_url, ...preferences }; overlay.remove(); render(); toast("Perfil atualizado."); };
     $("#profile-form", overlay).addEventListener("submit", async event => {
       const email = String(new FormData(event.currentTarget).get("email") || "").trim().toLowerCase();
       if (!email) return;
@@ -3340,9 +3455,12 @@
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
   }
 
-  function coverFor(item, variant = "card") {
+  function coverFor(item, variant = "card", coverChoices = null) {
     // A capa local aparece imediatamente; a capa real substitui-a quando terminar de carregar.
     if (!item) return instantCover({ title: "HQ" });
+    const activeChoices = coverChoices || (state.section === "public-profile" ? state.publicProfile?.coverChoices : state.coverChoices);
+    const selectedCover = activeChoices?.get?.(item.id)?.cover_url;
+    if (selectedCover) return proxiedImageUrl(selectedCover);
     if (variant === "hero" && item.featuredCoverUrl) return proxiedImageUrl(item.featuredCoverUrl);
     if (item.coverUrl) return proxiedImageUrl(item.coverUrl);
     if (item.cover) return proxiedImageUrl(item.cover); // backward compatibility
@@ -3561,20 +3679,25 @@
     else observeDeferred();
   }
 
-  function card(item, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, directOpen = false) {
+  function card(item, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, directOpen = false, coverChoices = null) {
     const completed = progressFor(item, progressMap)?.completed;
     const displayTitle = itemDisplayTitle(item);
     const issueLabel = itemIssueLabel(item);
+    const canChooseCover = state.session && ["premium", "moderator", "admin"].includes(state.profile?.plan) && favoriteIds === state.favoriteIds && state.favoriteIds.has(item.id) && (state.coverVariants.get(item.id) || []).length > 0;
+    const authors = String(item.author || "").split(/\s*(?:\/|&|\be\b)\s*/i).map(value => value.trim()).filter(Boolean);
+    const entityButton = (kind, value, label = value) => value ? `<button type="button" class="card-entity-link" data-entity-kind="${escapeHTML(kind)}" data-entity-value="${escapeHTML(value)}">${escapeHTML(label)}</button>` : "";
     return `
-      <article class="card" data-open="${escapeHTML(item.id)}" ${directOpen ? "data-open-direct=\"true\"" : ""}>
-        <div class="cover" data-cover-id="${escapeHTML(item.id)}" style="background-image:url('${escapeHTML(coverFor(item))}')">
+      <article class="card" data-open="${escapeHTML(item.id)}" ${(directOpen || (state.section === "public-profile" && state.publicProfile?.collectionId)) ? "data-open-direct=\"true\"" : ""}>
+        <div class="cover" data-cover-id="${escapeHTML(item.id)}" style="background-image:url('${escapeHTML(coverFor(item, "card", coverChoices))}')">
           <span class="cover-number">${escapeHTML(issueLabel)}</span>
+          ${canChooseCover ? `<button class="card-cover-choice" data-cover-choice="${escapeHTML(item.id)}" title="Escolher capa">Capa</button>` : ""}
           <button class="card-favorite ${favoriteIds.has(item.id) ? 'is-favorite' : ''}" data-favorite="${escapeHTML(item.id)}" title="Salvar na estante">★</button>
         </div>
-        ${completed ? '<div class="card-completed">✓ Concluída</div>' : ''}
+        ${completed ? '<div class="card-completed">✓ Lida</div>' : ''}
         <div class="card-body">
           <div class="card-title">${escapeHTML(displayTitle)}</div>
-          <div class="card-meta">${formatType(item.type)} · ${escapeHTML(String(item.year || ""))}</div>
+          <div class="card-meta">${entityButton("year", String(item.year || ""), String(item.year || ""))}${entityButton("character", item.character)}${entityButton("publisher", item.publisher)}${entityButton("imprint", item.imprint)}</div>
+          ${authors.length ? `<div class="card-authors">${authors.map(author => entityButton("author", author)).join(" ")}</div>` : ""}
           <div class="card-stats">♥ ${Number(item.clicks || 0).toLocaleString("pt-BR")} leituras</div>
           <div class="card-actions"><button class="card-like ${state.comicLikeIds.has(item.id) ? "is-liked" : ""}" data-like-item="${escapeHTML(item.id)}" title="Curtir quadrinho">${state.comicLikeIds.has(item.id) ? "♥" : "♡"} ${state.comicLikeCounts.get(item.id) || 0}</button><button class="card-share" data-share-item="${escapeHTML(item.id)}" title="Compartilhar quadrinho">Compartilhar</button><button class="card-comment" data-comment-item="${escapeHTML(item.id)}" title="Ver comentários">Comentários</button></div>
         </div>
@@ -3638,7 +3761,29 @@
       randoms = uniqueCatalogItems([...lib].sort(() => Math.random() - .5).slice(0, 8));
       state.homeRandomIds = randoms.map(item => item.id);
     }
-    const comics = uniqueCatalogItems(lib.filter(x => x.type === "comic").slice(0, 8));
+
+    const seriesEntries = new Map();
+    lib.filter(item => item.seriesId).forEach(item => {
+      if (!seriesEntries.has(item.seriesId)) seriesEntries.set(item.seriesId, []);
+      seriesEntries.get(item.seriesId).push(item);
+    });
+    const bestSeries = [...seriesEntries.entries()]
+      .map(([seriesId, editions]) => ({
+        item: editions[0],
+        likes: editions.reduce((total, edition) => total + (state.comicLikeCounts.get(edition.id) || 0), 0)
+      }))
+      .sort((a, b) => b.likes - a.likes || String(a.item.seriesTitle || a.item.title).localeCompare(String(b.item.seriesTitle || b.item.title), "pt-BR"))
+      .slice(0, 5);
+    const bestSeriesRail = bestSeries.length ? `<section class="section best-series-section"><div class="section-head"><div><h2 class="section-title">Melhores séries</h2><div class="section-subtitle">As séries mais curtidas, pela soma das curtidas de suas edições.</div></div></div><div class="results-grid">${bestSeries.map(entry => seriesCard(entry.item)).join("")}</div></section>` : "";
+
+    const publisherEntries = new Map();
+    lib.filter(item => item.type === "comic" && String(item.publisher || "").trim()).forEach(item => {
+      const name = String(item.publisher).trim();
+      if (!publisherEntries.has(name)) publisherEntries.set(name, []);
+      publisherEntries.get(name).push(item);
+    });
+    const pinnedPublishers = [...publisherEntries.entries()].filter(([name]) => state.publisherSettings.get(publisherKey(name))?.is_pinned);
+    const publisherPinnedRail = pinnedPublishers.length ? `<section class="section publisher-pinned-section"><div class="section-head"><div><h2 class="section-title">Editoras fixadas</h2><div class="section-subtitle">Acesso rápido às editoras em destaque.</div></div></div><div class="publisher-carousel">${pinnedPublishers.map(([name, publisherItems]) => { const setting = state.publisherSettings.get(publisherKey(name)); const representative = publisherItems.find(item => item.featuredCoverUrl || item.coverUrl || item.cover) || publisherItems[0]; const cover = setting?.cover_url || coverFor(representative); return `<button class="publisher-card is-pinned" type="button" data-publisher="${escapeHTML(name)}"><div class="publisher-card-cover" style="background-image:url('${escapeHTML(cover)}')"></div><div class="publisher-card-overlay"></div><div class="publisher-card-info"><strong>${escapeHTML(name)}</strong><span>${publisherItems.length} edição(ões)</span></div></button>`; }).join("")}</div></section>` : "";
 
     const featuredCollectionsRail = state.featuredComicCollections?.length ? `<section class="section featured-collections-rail"><div class="section-head"><div><h2 class="section-title">Coleções de quadrinhos em destaque</h2><div class="section-subtitle">Coleções públicas escolhidas pela equipe.</div></div></div><div class="public-collections-grid">${state.featuredComicCollections.map(collection => publicCollectionCard(collection)).join("")}</div></section>` : "";
     return `
@@ -3656,9 +3801,10 @@
       </section>
       <div class="content">
         ${rail("Mais lidos", mostClicked, "As edições que mais receberam cliques.", "Ver catálogo")}
+        ${publisherPinnedRail}
+        ${bestSeriesRail}
         ${featuredCollectionsRail}
         ${rail("Escolha aleatória", randoms, "Como escolher uma revista numa banca: você nunca sabe o que vai encontrar.", "", true)}
-        ${rail("Quadrinhos", comics)}
       </div>`;
   }
 
@@ -3686,11 +3832,20 @@
 
   function renderEntityPage() {
     const filter = state.entityFilter || { kind: "character", value: "" };
-    const allItems = state.db.library.filter(item => String(item[filter.kind] || "").toLowerCase() === String(filter.value || "").toLowerCase() && (filter.kind !== "publisher" || item.type === "comic"));
+    const normalizedValue = String(filter.value || "").trim().toLowerCase();
+    const allItems = state.db.library.filter(item => {
+      if (filter.kind === "year") return String(item.year || "") === String(filter.value || "");
+      if (filter.kind === "author") return String(item.author || "").split(/\s*(?:\/|&|\be\b)\s*/i).some(author => author.trim().toLowerCase() === normalizedValue);
+      return String(item[filter.kind] || "").trim().toLowerCase() === normalizedValue && (filter.kind !== "publisher" || item.type === "comic");
+    });
     const collectionFilter = state.collectionFilter || { field: "all", query: "" };
     const items = filter.kind === "publisher" ? uniqueCatalogItems(filterCollectionItems(allItems, collectionFilter.field, collectionFilter.query)) : allItems;
-    const title = filter.kind === "publisher" ? "Editora" : "Personagem";
-    if (filter.kind !== "publisher") return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) relacionadas a ${title.toLowerCase()}</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div><section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
+    const labels = { publisher: "Editora", character: "Personagem", imprint: "Selo", author: "Autor", year: "Ano", publication: "Publicação", status: "Status" };
+    const title = labels[filter.kind] || "Catálogo";
+    const wikiSearch = `https://pt.wikipedia.org/wiki/Especial:Pesquisar?search=${encodeURIComponent(filter.value || "")}`;
+    const wikiText = filter.kind === "year" ? `Todos os quadrinhos publicados em ${filter.value}.` : `${filter.value} aparece em ${items.length} edição(ões) do catálogo da Banca Digital.`;
+    const wikiMarkup = filter.kind === "year" ? "" : `<section class="entity-wiki"><div class="eyebrow">Wiki rápida</div><p>${escapeHTML(wikiText)}</p><a class="small-btn" href="${escapeHTML(wikiSearch)}" target="_blank" rel="noopener">Pesquisar na Wikipédia</a></section>`;
+    if (filter.kind !== "publisher") return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo · ${escapeHTML(title)}</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div>${wikiMarkup}<section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
     const setting = state.publisherSettings.get(publisherKey(filter.value));
     const canManage = ["moderator", "admin"].includes(state.profile?.plan);
     const grouped = new Map();
@@ -3718,9 +3873,19 @@
         return `<div class="publisher-series-group"><div class="publisher-series-heading"><h4 class="publisher-series-title">${escapeHTML(seriesItems[0].seriesTitle || seriesItems[0].title)}</h4>${orderedItems.length > 1 ? `<button class="small-btn publisher-series-toggle" type="button" data-publisher-series-toggle="${escapeHTML(seriesKey)}">${expanded ? "Ocultar edições" : `Mostrar todas (${orderedItems.length})`}</button>` : ""}</div><div class="results-grid">${visibleItems.map(item => card(item)).join("")}</div></div>`;
       }).join("");
     };
-    const publisherGroupMarkup = groupItems => groupItems.sort((a, b) => String(a.seriesTitle || a.title).localeCompare(String(b.seriesTitle || b.title), "pt-BR")).map(item => card(item)).join("");
+    const publisherGroupMarkup = groupItems => {
+      const groupedSeries = new Map();
+      groupItems.forEach(item => {
+        const key = item.seriesId || item.id;
+        if (!groupedSeries.has(key)) groupedSeries.set(key, item);
+      });
+      return [...groupedSeries.values()]
+        .sort((a, b) => String(a.seriesTitle || a.title).localeCompare(String(b.seriesTitle || b.title), "pt-BR"))
+        .map(item => item.seriesId ? seriesCard(item) : card(item))
+        .join("");
+    };
     const imprintMarkup = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, "pt-BR")).map(([imprint, initials]) => `<section class="search-imprint publisher-imprint"><div class="section-head"><div><h2 class="section-title">${escapeHTML(imprint)}</h2><div class="section-subtitle">Selo</div></div></div>${initialOrder.filter(initial => initials.has(initial)).map(initial => `<section class="search-initial"><h3 class="search-initial-title">${initial}</h3><div class="results-grid publisher-initial-grid">${publisherGroupMarkup(initials.get(initial))}</div></section>`).join("")}</section>`).join("");
-    return `<div class="content publisher-page"><div class="section-head"><div><div class="eyebrow">Explorar catálogo</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) da editora</div></div><div class="publisher-page-actions"><button class="small-btn" data-section="home">Voltar ao início</button>${canManage ? `<button class="small-btn" data-publisher-settings="${escapeHTML(filter.value)}">Configurar editora</button>` : ""}</div></div>${setting?.is_pinned ? '<div class="publisher-pin-badge">★ Editora fixada no carrossel</div>' : ""}${imprintMarkup || '<div class="empty">Nenhuma edição encontrada.</div>'}</div>`;
+    return `<div class="content publisher-page"><div class="section-head"><div><div class="eyebrow">Explorar catálogo · Editora</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões) da editora</div></div><div class="publisher-page-actions"><button class="small-btn" data-section="home">Voltar ao início</button>${canManage ? `<button class="small-btn" data-publisher-settings="${escapeHTML(filter.value)}">Configurar editora</button>` : ""}</div></div>${wikiMarkup}${setting?.is_pinned ? '<div class="publisher-pin-badge">★ Editora fixada no carrossel</div>' : ""}${imprintMarkup || '<div class="empty">Nenhuma edição encontrada.</div>'}</div>`;
   }
 
   function renderLoginPage() {
@@ -3768,18 +3933,30 @@
 
   const SHELF_PREVIEW_LIMIT = 6;
 
-  function shelfCollectionMarkup(title, items, key, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, actions = "") {
+  function shelfCollectionMarkup(title, items, key, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, actions = "", coverChoices = null, renderSeriesCards = false) {
     const expanded = Boolean(state.shelfExpanded[key]);
     const visibleItems = expanded ? items : items.slice(0, SHELF_PREVIEW_LIMIT);
     const likedCollection = key === "read" && state.section === "shelf" ? shelfCollectionMarkup("Curtidas", shelfItemsByIds([...state.comicLikeIds]), "liked") : "";
-    const directOpen = key === "saved" && state.section === "shelf";
-    return `<section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">${escapeHTML(title)}</h2><div class="section-subtitle">${items.length} item(ns)</div></div><div class="shelf-section-actions">${actions}${items.length > SHELF_PREVIEW_LIMIT ? `<button class="small-btn" data-shelf-expand="${escapeHTML(key)}">${expanded ? "Mostrar menos" : "Ver todos"}</button>` : ""}</div></div><div class="results-grid">${visibleItems.map(item => card(item, progressMap, favoriteIds, directOpen)).join("") || '<div class="empty">Nenhum item nesta coleção.</div>'}</div></section>${likedCollection}`;
+    const directOpen = state.section === "shelf" || (state.section === "public-profile" && state.publicProfile?.collectionId);
+    return `<section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">${escapeHTML(title)}</h2><div class="section-subtitle">${items.length} item(ns)</div></div><div class="shelf-section-actions">${actions}${items.length > SHELF_PREVIEW_LIMIT ? `<button class="small-btn" data-shelf-expand="${escapeHTML(key)}">${expanded ? "Mostrar menos" : "Ver todos"}</button>` : ""}</div></div><div class="results-grid">${visibleItems.map(item => renderSeriesCards && item.seriesId ? seriesCard(item, favoriteIds) : card(item, progressMap, favoriteIds, directOpen, coverChoices)).join("") || '<div class="empty">Nenhum item nesta coleção.</div>'}</div></section>${likedCollection}`;
+  }
+
+  function isSeriesId(id) {
+    const value = String(id || "");
+    return (window.DEFAULT_SERIES || []).some(series => series.id === value)
+      || state.db.library.some(item => item.id === value && item.seriesId === value);
   }
 
   function shelfItemsByIds(ids, unique = false) {
     const allowed = new Set(ids);
     const items = state.db.library.filter(item => allowed.has(item.id));
+    const savedSeries = [...allowed].filter(isSeriesId).map(seriesId => state.db.library.find(item => item.seriesId === seriesId)).filter(Boolean);
+    items.push(...savedSeries);
     return unique ? uniqueCatalogItems(items) : items;
+  }
+
+  function publicCollectionItems(category, publicState) {
+    return shelfItemsByIds(category.itemIds || []).filter(item => publicState.favoriteIds.has(item.id) || (item.seriesId && publicState.favoriteIds.has(item.seriesId)));
   }
 
   function followSummary(profileId, followerCount, followingCount) {
@@ -4066,16 +4243,18 @@
   function renderShelfPage() {
     if (!state.session) return renderLoginPage();
     const snapshot = ensureShelfSnapshot();
-    const savedItems = shelfItemsByIds([...snapshot.saved], false);
-    const readItems = shelfItemsByIds([...snapshot.read]);
+    const savedItems = shelfItemsByIds([...snapshot.saved].filter(id => !isSeriesId(id)), false).map(item => ({ ...item, seriesId: null }));
+    const savedSeries = shelfItemsByIds([...snapshot.saved].filter(isSeriesId), true);
+    const readItems = shelfItemsByIds([...snapshot.read]).map(item => ({ ...item, seriesId: null }));
+    const completedItems = completedSeriesItems(state.readingProgress);
     const canCustomize = ["admin", "moderator", "premium"].includes(state.profile?.plan);
     const categories = state.shelfCategories.map(category => ({ ...category, itemIds: (category.itemIds || []).filter(id => snapshot.saved.has(id)) }));
-    return `<div class="content"><div class="profile-header">${avatarMarkup(state.profile)}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">Coleções fixas para organizar seus quadrinhos</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div>${shelfCollectionMarkup("Salvos", savedItems, "saved")}${shelfCollectionMarkup("Lidos", readItems, "read")}${canCustomize ? `<section class="section shelf-categories"><div class="section-head"><div><h2 class="section-title">Coleções pessoais</h2><div class="section-subtitle">Coleções públicas aparecem no seu perfil e podem ser compartilhadas</div></div><button class="small-btn" data-shelf-new-category>+ Nova coleção</button></div>${categories.map(category => shelfCollectionMarkup(category.name, shelfItemsByIds(category.itemIds), `category:${category.id}`, state.readingProgress, state.favoriteIds, `<span class="shelf-visibility ${category.isPublic !== false ? "is-public" : "is-private"}">${category.isPublic !== false ? "Pública" : "Privada"}</span>${category.isPublic !== false ? `<button class="small-btn" data-copy-collection="${escapeHTML(category.id)}">Compartilhar</button>` : ""}<button class="small-btn" data-shelf-edit-category="${escapeHTML(category.id)}">Editar</button><button class="small-btn danger" data-shelf-delete-category="${escapeHTML(category.id)}">Excluir</button>`)).join("") || '<div class="empty">Crie uma coleção para começar a organizar seus salvos.</div>'}</section>` : ""}</div>`;
+    return `<div class="content"><div class="profile-header">${avatarMarkup(state.profile)}<div><div class="eyebrow">@${escapeHTML(state.profile?.username || "")}</div>${state.profile?.title ? `<div class="profile-title" style="--title-bg:${safeTitleColor(state.profile.title_color)}">${escapeHTML(state.profile.title)}</div>` : ""}${trophyRoom(state.achievements)}</div><div class="profile-actions"><button class="small-btn" data-action="profile">Editar perfil</button><button class="small-btn" data-action="logout">Sair</button></div></div><div class="section-head"><div><h1 class="section-title">Minha estante</h1><div class="section-subtitle">Coleções fixas para organizar seus quadrinhos e séries</div></div><button class="btn btn-danger" data-action="open-local-box">Abrir caixa</button></div><div class="notice local-box-notice"><b>Minha caixa:</b> leia arquivos do seu computador sem enviá-los para o servidor. Tudo fica apenas neste navegador e some quando você sair.</div>${shelfCollectionMarkup("Salvos", savedItems, "saved")}${state.profile?.shelf_series_public !== false ? shelfCollectionMarkup("Séries salvas", savedSeries, "series-saved", state.readingProgress, state.favoriteIds, "", null, true) : ""}${shelfCollectionMarkup("Lidos", readItems, "read")}${state.profile?.shelf_completed_public !== false ? shelfCollectionMarkup("Concluídos", completedItems, "completed", state.readingProgress, state.favoriteIds, "", null, true) : ""}${canCustomize ? `<section class="section shelf-categories"><div class="section-head"><div><h2 class="section-title">Coleções pessoais</h2><div class="section-subtitle">Misture séries e edições na mesma coleção</div></div><button class="small-btn" data-shelf-new-category>+ Nova coleção</button></div>${categories.map(category => shelfCollectionMarkup(category.name, shelfItemsByIds(category.itemIds), `category:${category.id}`, state.readingProgress, state.favoriteIds, `<span class="shelf-visibility ${category.isPublic !== false ? "is-public" : "is-private"}">${category.isPublic !== false ? "Pública" : "Privada"}</span>${category.isPublic !== false ? `<button class="small-btn" data-copy-collection="${escapeHTML(category.id)}">Compartilhar</button>` : ""}<button class="small-btn" data-shelf-edit-category="${escapeHTML(category.id)}">Editar</button><button class="small-btn danger" data-shelf-delete-category="${escapeHTML(category.id)}">Excluir</button>`)).join("") || '<div class="empty">Crie uma coleção para começar a organizar seus salvos.</div>'}</section>` : ""}</div>`;
   }
 
   function renderPublicCollectionPage(publicState, category) {
     const profile = publicState.profile;
-    const allItems = state.db.library.filter(item => (category.itemIds || []).includes(item.id) && publicState.favoriteIds.has(item.id));
+    const allItems = publicCollectionItems(category, publicState);
     const filter = state.collectionFilter || { field: "all", query: "" };
     const items = filterCollectionItems(allItems, filter.field, filter.query);
     const isLiked = publicState.collectionLikes?.has(category.id);
@@ -4209,11 +4388,15 @@
     if (publicState.error) return `<div class="content"><div class="empty">${escapeHTML(publicState.error)}</div></div>`;
     const profile = publicState.profile;
     const savedVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_saved_public !== false;
+    const seriesVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_series_public !== false;
     const readVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_read_public !== false;
+    const completedVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_completed_public !== false;
     const likedVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_liked_public !== false;
-    const savedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.favoriteIds.has(item.id)));
-    const readItems = uniqueCatalogItems(state.db.library.filter(item => publicState.readingProgress.get(item.id)?.completed));
-    const likedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.comicLikeIds?.has(item.id)));
+    const savedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.favoriteIds.has(item.id))).map(item => ({ ...item, seriesId: null }));
+    const savedSeries = shelfItemsByIds([...publicState.favoriteIds].filter(isSeriesId), true);
+    const readItems = uniqueCatalogItems(state.db.library.filter(item => publicState.readingProgress.get(item.id)?.completed)).map(item => ({ ...item, seriesId: null }));
+    const likedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.comicLikeIds?.has(item.id))).map(item => ({ ...item, seriesId: null }));
+    const completedItems = completedSeriesItems(publicState.readingProgress);
     const publicCategories = (publicState.collections || []).filter(category => category.isPublic !== false);
     const publicBlogCollections = (publicState.blogCollections || []).filter(collection => collection.isPublic !== false);
     const selectedCategory = publicCategories.find(category => category.id === publicState.collectionId);
@@ -4234,9 +4417,11 @@
       </div>
       <div class="section-head"><div><h1 class="section-title">Estante de @${escapeHTML(profile.username)}</h1><div class="section-subtitle">${publicState.followerCount || 0} seguidores · ${publicState.followingCount || 0} seguindo · Coleções públicas do perfil</div></div><div class="profile-actions">${canFollow ? `<button class="small-btn follow-button ${publicState.isFollowing ? "is-following" : ""}" data-follow-profile>${publicState.isFollowing ? "Seguindo" : "Seguir"}</button>` : ""}<button class="small-btn" data-section="home">Voltar ao início</button>${canModerate ? `<button class="small-btn moderation-button" data-open-moderation>Moderação</button>` : ""}</div></div>
       ${savedVisible ? shelfCollectionMarkup("Salvos", savedItems, "public-saved", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Salvos está oculta neste perfil.</div>'}
+      ${seriesVisible ? shelfCollectionMarkup("Séries salvas", savedSeries, "public-series-saved", publicState.readingProgress, publicState.favoriteIds, "", null, true) : '<div class="notice">A coleção Séries salvas está oculta neste perfil.</div>'}
       ${readVisible ? shelfCollectionMarkup("Lidos", readItems, "public-read", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Lidos está oculta neste perfil.</div>'}
+      ${completedVisible ? shelfCollectionMarkup("Concluídos", completedItems, "public-completed", publicState.readingProgress, publicState.favoriteIds, "", null, true) : '<div class="notice">A coleção Concluídos está oculta neste perfil.</div>'}
       ${likedVisible ? shelfCollectionMarkup("Curtidos", likedItems, "public-liked", publicState.readingProgress, publicState.favoriteIds) : '<div class="notice">A coleção Curtidos está oculta neste perfil.</div>'}
-      ${publicCategories.map(category => { const items = state.db.library.filter(item => (category.itemIds || []).includes(item.id) && publicState.favoriteIds.has(item.id)); const liked = publicState.collectionLikes?.has(category.id); const likes = publicState.collectionLikeCounts?.get(category.id) || 0; return shelfCollectionMarkup(category.name, items, `public-category:${category.id}`, publicState.readingProgress, publicState.favoriteIds, `<span class="shelf-visibility is-public">Pública</span><button class="small-btn ${liked ? "is-liked" : ""}" data-like-collection="${escapeHTML(category.id)}" data-like-owner="${escapeHTML(profile.id)}">${liked ? "♥" : "♡"} ${likes}</button><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username, category.id))}">Abrir coleção</a><button class="small-btn" data-copy-collection="${escapeHTML(category.id)}" data-copy-username="${escapeHTML(profile.username)}">Compartilhar</button>`); }).join("")}
+      ${publicCategories.map(category => { const items = publicCollectionItems(category, publicState); const liked = publicState.collectionLikes?.has(category.id); const likes = publicState.collectionLikeCounts?.get(category.id) || 0; return shelfCollectionMarkup(category.name, items, `public-category:${category.id}`, publicState.readingProgress, publicState.favoriteIds, `<span class="shelf-visibility is-public">Pública</span><button class="small-btn ${liked ? "is-liked" : ""}" data-like-collection="${escapeHTML(category.id)}" data-like-owner="${escapeHTML(profile.id)}">${liked ? "♥" : "♡"} ${likes}</button><a class="small-btn" href="${escapeHTML(publicProfileHref(profile.username, category.id))}">Abrir coleção</a><button class="small-btn" data-copy-collection="${escapeHTML(category.id)}" data-copy-username="${escapeHTML(profile.username)}">Compartilhar</button>`); }).join("")}
     </div>`;
   }
 
@@ -4537,9 +4722,20 @@
     });
     $$('.local-box-nav').forEach(button => { button.style.display = state.session && state.localBoxVisible ? "" : "none"; });
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
+    $$('[data-series-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleSeriesFavorite(el.dataset.seriesFavorite); }));
+    $$('[data-cover-choice]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openCoverChoice(el.dataset.coverChoice); }));
+    $$('[data-read-item]').forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      const item = state.db.library.find(x => x.id === el.dataset.readItem);
+      if (item) openReader(item);
+    }));
     $$('[data-like-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleComicLike(el.dataset.likeItem); }));
     $$('[data-share-item]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); shareComic(el.dataset.shareItem); }));
     $$('[data-publisher]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openEntityPage("publisher", el.dataset.publisher); }));
+    $$('[data-entity-kind]').forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      openEntityPage(el.dataset.entityKind, el.dataset.entityValue);
+    }));
     $$('[data-follow-list]').forEach(el => el.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); openFollowList(el.dataset.followList, el.dataset.followProfileId); }));
     $$('[data-notification-open]').forEach(el => el.addEventListener("click", () => markNotificationRead(el.dataset.notificationOpen)));
     $('[data-mark-all-notifications]')?.addEventListener("click", markAllNotificationsRead);
@@ -4720,6 +4916,14 @@
       if (a === "open-local-box") { state.localBoxVisible = true; setSection("local-box"); }
     }));
     $$("[data-collection]").forEach(el => el.addEventListener("click", () => openCollection(el.dataset.collection)));
+    const openSeriesById = seriesId => {
+      const first = state.db.library.find(item => item.seriesId === seriesId);
+      if (first) openSeriesSelection(first, seriesEditions(first));
+    };
+    $$('.series-card[data-open-series]').forEach(el => el.addEventListener("click", event => {
+      if (event.target.closest("button")) return;
+      openSeriesById(el.dataset.openSeries);
+    }));
     if ($('[data-action="clear-local-box"]')) $('[data-action="clear-local-box"]').onclick = () => { clearLocalBox(); render(); toast("Minha caixa foi limpa."); };
     $("#local-folder-input")?.addEventListener("change", event => {
       const files = [...event.target.files].filter(supportedLocalFile);
@@ -4817,7 +5021,7 @@
     overlay.innerHTML = `
       <div class="modal series-modal">
         <div class="section-head">
-          <div><div class="eyebrow">Série</div><h2>${escapeHTML(series.seriesTitle || series.title)}</h2><div class="section-subtitle">${editions.length} edições disponíveis</div></div>
+          <div><div class="eyebrow">Série</div><h2>${escapeHTML(series.seriesTitle || series.title)}</h2><div class="section-subtitle">${editions.length} edições disponíveis · clique em uma edição para ler</div></div>
           <button class="small-btn" data-close>Fechar</button>
         </div>
         ${volumeTabs}${volumePanels}
@@ -4828,6 +5032,10 @@
     $$('[data-open]', overlay).forEach(el => el.addEventListener("click", () => {
       overlay.remove();
       openReader(state.db.library.find(x => x.id === el.dataset.open));
+    }));
+    $$('[data-cover-choice]', overlay).forEach(el => el.addEventListener("click", event => {
+      event.stopPropagation();
+      openCoverChoice(el.dataset.coverChoice);
     }));
     $$('[data-favorite]', overlay).forEach(el => el.addEventListener("click", event => {
       event.stopPropagation();
@@ -4907,13 +5115,16 @@
     $("[data-export]", overlay).onclick = exportDB;
     $("[data-import]", overlay).onclick = importDB;
     $("[data-reset]", overlay).onclick = () => {
-      state.db = {library:structuredClone(window.DEFAULT_LIBRARY), collections:structuredClone(window.DEFAULT_COLLECTIONS), submissions:[]};
+      state.db = {library:structuredClone(window.DEFAULT_LIBRARY), collections:structuredClone(window.DEFAULT_COLLECTIONS), submissions:[], removedItemIds:[]};
       save(); overlay.remove(); render(); toast("Catálogo restaurado.");
     };
     $$("[data-edit]", overlay).forEach(b => b.onclick = () => { overlay.remove(); openEditForm(b.dataset.edit); });
     $$("[data-delete]", overlay).forEach(b => b.onclick = () => {
-      state.db.library = state.db.library.filter(x => x.id !== b.dataset.delete);
-      state.db.collections.forEach(c => c.issueIds = c.issueIds.filter(i => i !== b.dataset.delete));
+      const itemId = b.dataset.delete;
+      state.db.removedItemIds = Array.isArray(state.db.removedItemIds) ? state.db.removedItemIds : [];
+      if (!state.db.removedItemIds.includes(itemId)) state.db.removedItemIds.push(itemId);
+      state.db.library = state.db.library.filter(x => x.id !== itemId);
+      state.db.collections.forEach(c => c.issueIds = c.issueIds.filter(i => i !== itemId));
       save(); overlay.remove(); render(); openAdmin(); toast("Edição excluída.");
     });
   }
@@ -4991,7 +5202,7 @@
     const series = uniqueCatalogItems(items.filter(x => x.seriesId));
     const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
     const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
-    const group = (title, groupItems) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => card(item)).join("")}</div></section>` : "";
+    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
     const publishers = new Map();
     items.filter(item => String(item.publisher || "").trim()).forEach(item => {
       const publisher = String(item.publisher).trim();
@@ -5000,7 +5211,7 @@
     });
     const publisherCarousel = type === "comic" && publishers.size ? `<section class="section publisher-carousel-section"><div class="section-head"><div><h2 class="section-title">Editoras</h2><div class="section-subtitle">Explore os quadrinhos por editora</div></div></div><div class="publisher-carousel">${[...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR")).map(([publisher, publisherItems]) => { const representative = publisherItems.find(item => item.featuredCoverUrl || item.coverUrl || item.cover) || publisherItems[0]; return `<button class="publisher-card" type="button" data-publisher="${escapeHTML(publisher)}"><div class="publisher-card-cover" style="background-image:url('${escapeHTML(coverFor(representative))}')"></div><div class="publisher-card-overlay"></div><div class="publisher-card-info"><strong>${escapeHTML(publisher)}</strong><span>${publisherItems.length} quadrinho(s)</span></div></button>`; }).join("")}</div></section>` : "";
     const catalogHeader = type === "comic" ? "" : `<div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>`;
-    return `<div class="content">${catalogHeader}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}${publisherCarousel}</div>`;
+    return `<div class="content">${catalogHeader}${group("Séries", series, true)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}${publisherCarousel}</div>`;
   }
 
   function openSubmission() {
@@ -5193,8 +5404,8 @@
     const series = uniqueCatalogItems(items.filter(x => x.seriesId));
     const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
     const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
-    const group = (title, groupItems) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => card(item)).join("")}</div></section>` : "";
-    return `<div class="content"><div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
+    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
+    return `<div class="content"><div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>${group("Séries", series, true)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
   }
 
   function openSubmission() {
@@ -5211,7 +5422,7 @@
     const series = uniqueCatalogItems(items.filter(x => x.seriesId));
     const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
     const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
-    const group = (title, groupItems) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => card(item)).join("")}</div></section>` : "";
+    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
     const publishers = new Map();
     items.filter(item => String(item.publisher || "").trim()).forEach(item => {
       const publisher = String(item.publisher).trim();
@@ -5220,14 +5431,14 @@
     });
     const publisherCarousel = type === "comic" && publishers.size ? `<section class="section publisher-carousel-section"><div class="section-head"><div><h2 class="section-title">Editoras</h2><div class="section-subtitle">Explore os quadrinhos por editora</div></div></div><div class="publisher-carousel">${[...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR")).map(([publisher, publisherItems]) => { const representative = publisherItems.find(item => item.featuredCoverUrl || item.coverUrl || item.cover) || publisherItems[0]; return `<button class="publisher-card" type="button" data-publisher="${escapeHTML(publisher)}"><div class="publisher-card-cover" style="background-image:url('${escapeHTML(coverFor(representative))}')"></div><div class="publisher-card-overlay"></div><div class="publisher-card-info"><strong>${escapeHTML(publisher)}</strong><span>${publisherItems.length} quadrinho(s)</span></div></button>`; }).join("")}</div></section>` : "";
     const catalogHeader = type === "comic" ? "" : `<div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>`;
-    return `<div class="content">${catalogHeader}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}${publisherCarousel}</div>`;
+    return `<div class="content">${catalogHeader}${group("Séries", series, true)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}${publisherCarousel}</div>`;
   }
 
   function renderCatalog(type = null) {
     const items = type ? state.db.library.filter(x => x.type === type) : state.db.library;
     const series = uniqueCatalogItems(items.filter(x => x.seriesId));
     const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
-    const group = (title, groupItems) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => card(item)).join("")}</div></section>` : "";
+    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
     const publishers = new Map();
     items.filter(item => String(item.publisher || "").trim()).forEach(item => { const name = String(item.publisher).trim(); if (!publishers.has(name)) publishers.set(name, []); publishers.get(name).push(item); });
     const publisherEntries = [...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR"));
@@ -5239,7 +5450,21 @@
     const popularCollectionsMarkup = type === "comic" && popularCollections.length ? `<section class="section popular-collections-section"><div class="section-head"><div><h2 class="section-title">Coleções públicas mais curtidas</h2><div class="section-subtitle">Descubra listas públicas da comunidade</div></div></div><div class="feature-grid">${popularCollections.map(collection => `<div class="feature-card" data-public-collection="${escapeHTML(collection.id)}" data-public-owner="${escapeHTML(collection.username)}"><div class="cover" style="background-image:url('${escapeHTML(collection.cover_url || "")}')"></div><div class="gradient"></div><div class="feature-info"><h3>${escapeHTML(collection.name)}</h3><p>${collection.likes} curtida(s) · @${escapeHTML(collection.username)}</p></div></div>`).join("")}</div></section>` : "";
     const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
     const catalogHeader = type === "comic" ? "" : `<div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>`;
-    return `<div class="content">${catalogHeader}${publisherPinnedCarousel}${group("Séries", series)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}${publisherCarousel}${popularCollectionsMarkup}</div>`;
+    return `<div class="content">${catalogHeader}${publisherPinnedCarousel}${group("Séries", series, true)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}${publisherCarousel}${popularCollectionsMarkup}</div>`;
+  }
+
+  function seriesDefinitionFor(item) {
+    const definition = (window.DEFAULT_SERIES || []).find(series => series.id === item?.seriesId);
+    return { ...(definition || {}), ...item, title: definition?.name || item?.seriesTitle || item?.title || "Série", seriesTitle: definition?.name || item?.seriesTitle || item?.title || "Série", coverUrl: definition?.coverUrl || item?.coverUrl || item?.cover || "" };
+  }
+
+  function seriesCard(item, favoriteIds = state.favoriteIds) {
+    const series = seriesDefinitionFor(item);
+    const editions = seriesEditions(item);
+    const count = editions.length || series.editions || "—";
+    const entityButton = (kind, value) => value ? `<button type="button" class="series-entity-link" data-entity-kind="${escapeHTML(kind)}" data-entity-value="${escapeHTML(value)}">${escapeHTML(value)}</button>` : "";
+    const saved = favoriteIds.has(item.seriesId);
+    return `<article class="series-card" data-open-series="${escapeHTML(item.seriesId)}" tabindex="0"><div class="series-card-cover" style="background-image:url('${escapeHTML(coverFor(series))}')"></div><div class="series-card-body"><div class="eyebrow">Série</div><h3>${escapeHTML(series.name || series.seriesTitle)}</h3><p class="series-card-description">${escapeHTML(series.description || "")}</p><div class="series-card-meta">${entityButton("publisher", series.publisher)}${entityButton("publication", series.publication)}${entityButton("status", series.status)}</div><div class="series-card-footer"><span>${escapeHTML(String(count))} edições</span><button type="button" class="series-save-button ${saved ? "is-saved" : ""}" data-series-favorite="${escapeHTML(item.seriesId)}">${saved ? "★ Salva" : "☆ Salvar"}</button></div></div></article>`;
   }
 
   window.addEventListener("popstate", applyRoute);

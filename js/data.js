@@ -25,6 +25,9 @@ window.DEFAULT_SERIES = [
   }
 ];
 
+// Registros de demonstração da primeira versão do catálogo.
+window.REMOVED_DEFAULT_ITEM_IDS = ["hq-001", "hq-002", "hq-003", "hq-004"];
+
 window.DEFAULT_SERIES.push({
   id: "series-absolute-superman",
   name: "Absolute Superman",
@@ -1108,45 +1111,8 @@ window.DEFAULT_LIBRARY = [
   { id: "fury-of-firestorm-2026-003", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "3", format: "cbr", fileUrl: "https://www.mediafire.com/file/j7osac1eaizr7cv/A+F%C3%BAria+do+Nuclear+%2303+%282026%29+%28SoQuadrinhos%29.cbr/file", coverUrl: "https://i.ibb.co/PGRSKxky/nuclear3.jpg", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "fury-of-firestorm-2026-004", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "4", format: "cbr", fileUrl: "https://www.mediafire.com/file/htnfmlzv392x6h6/A+F%C3%BAria+do+Nuclear+%2304+%282026%29+%28SoQuadrinhos%29.cbr/file", coverUrl: "https://i.ibb.co/PzGMgHHs/nuclear4.jpg", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
   { id: "fury-of-firestorm-2026-005", seriesId: "series-fury-of-firestorm-2026", title: "A Fúria do Nuclear", issue: "5", format: "cbr", fileUrl: "https://www.mediafire.com/file/cq5eyd3n7thbx4f/A+F%C3%BAria+do+Nuclear+%2305+%282026%29+%28SoQuadrinhos%29.cbr/file", coverUrl: "https://i.postimg.cc/pXCRFdpv/nuclear5.jpg", clicks: 0, featured: true, randomWeight: 5, collectionIds: [] },
-  {
-    id: "manga-001",
-    title: "Tomoki-kun wa Onnanoko",
-    issue: "Volume Único",
-    type: "manga",
-    author: "Cyoro",
-    publisher: "Shueisha",
-    imprint: "Jump Comics",
-    year: 2015,
-    description: "Tomoki é um garoto que parece uma garota. Ele só quer viver uma vida normal no ensino médio, mas sua aparência fofa sempre causa problemas e mal-entendidos.",
-    coverUrl: "",
-    fileUrl: "Arquivos/Tomoki-kun-wa-Onnanoko.cbz",
-    telegramUrl: "",
-    format: "cbz",
-    clicks: 0,
-    featured: true,
-    randomWeight: 5,
-    tags: ["mangá", "comédia", "slice of life", "romance", "gender bender"],
-    collectionIds: []
-  },
-  {
-    id: "hq-003",
-    title: "Sapos",
-    issue: "Edição 03",
-    type: "comic",
-    author: "Autor",
-    publisher: "Casulo",
-    imprint: "Casulo Comics",
-    year: 2026,
-    description: "Uma aventura inesperada.",
-    coverUrl: "",
-    fileUrl: "Arquivos/Capitão-América-Vol.14-04-(2025).cbz",
-    format: "cbz",
-    clicks: 0,
-    featured: false,
-    randomWeight: 4,
-    tags: ["aventura", "comédia"],
-    collectionIds: ["colecao-001"]
-  },
+
+  
 ];
 
 window.DEFAULT_LIBRARY.filter(item => item.seriesId === "series-justice-godzilla-kong-2023").forEach((item, index) => {

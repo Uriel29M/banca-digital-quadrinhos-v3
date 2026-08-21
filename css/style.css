@@ -353,6 +353,8 @@ main { min-height: calc(100vh - 150px); }
 .publisher-card-info strong { font-size: 16px; }
 .publisher-card-info span { color: #c5c5ce; font-size: 11px; }
 .publisher-page-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.entity-wiki { margin: 0 0 26px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.025); }
+.entity-wiki p { margin: 6px 0 12px; color: var(--muted); line-height: 1.5; }
 .publisher-pin-badge { display: inline-block; margin: -4px 0 18px; padding: 6px 10px; border: 1px solid rgba(255,212,92,.45); border-radius: 999px; color: #ffd45c; font-size: 12px; }
 .publisher-imprint { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
 .publisher-imprint:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
@@ -681,6 +683,29 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .auth-modal { width: min(100%, 500px); }
 .card-favorite { position: absolute; right: 9px; top: 9px; border: 0; border-radius: 50%; width: 30px; height: 30px; background: rgba(0,0,0,.72); color: #aaa; cursor: pointer; z-index: 2; }
 .card-favorite.is-favorite { color: #ffd45c; }
+.card-entity-link { display: inline; margin: 0 5px 4px 0; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 11px; }
+.card-entity-link:hover { color: #e50914; text-decoration: underline; }
+.card-authors { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px; }
+.card-cover-choice { position: absolute; left: 9px; top: 9px; border: 0; border-radius: 12px; padding: 5px 8px; background: rgba(0,0,0,.76); color: #fff; cursor: pointer; z-index: 2; font-size: 11px; }
+.cover-choice-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; max-height: 420px; overflow: auto; }
+.cover-choice-option { display: flex; flex-direction: column; gap: 6px; cursor: pointer; font-size: 12px; }
+.cover-choice-option img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 6px; background: #222; }
+.cover-choice-option input { accent-color: #e50914; }
+.series-card { position: relative; min-width: 0; aspect-ratio: 2 / 3; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; cursor: pointer; }
+.series-card:hover, .series-card:focus-visible { border-color: #e50914; box-shadow: 0 0 0 1px #e50914, 0 12px 28px rgba(229,9,20,.16); transform: translateY(-2px); outline: none; }
+.series-card-cover { position: absolute; inset: 0; background: center / cover no-repeat; opacity: .82; transition: opacity .18s ease; }
+.series-card:hover .series-card-cover, .series-card:focus-visible .series-card-cover { opacity: .92; }
+.series-card-body { position: absolute; right: 0; bottom: 0; left: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; min-height: 38%; padding: 12px 11px 10px; background: linear-gradient(0deg, rgba(10,10,13,.98), rgba(10,10,13,.88) 72%, rgba(10,10,13,0)); }
+.series-card-body h3 { margin: 0; font-size: 14px; line-height: 1.3; }
+.series-card-description { display: -webkit-box; margin: 0; color: #d0d0d6; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; font-size: 10px; }
+.series-card-meta { display: flex; flex-wrap: wrap; gap: 0 7px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.series-entity-link { padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.series-entity-link:hover { color: #ff5962; text-decoration: underline; }
+.series-card-footer { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+.best-series-section .results-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; overflow: hidden; }
+.best-series-section .series-card { min-width: 0; }
+.series-save-button { margin-left: auto; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 10px; }
+.series-save-button:hover, .series-save-button.is-saved { border-color: #ffd45c; color: #ffd45c; }
 .reader-comments { max-height: 280px; overflow-y: auto; padding: 0 18px; background: linear-gradient(180deg, #15151a, #111114); border-top: 1px solid #29292f; }
 .reader-comments summary { cursor: pointer; padding: 13px 0; color: #aaa; font-size: 12px; font-weight: 800; letter-spacing: .02em; list-style: none; }
 .reader-comments summary::-webkit-details-marker { display: none; }
