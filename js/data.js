@@ -3,8 +3,6 @@
    ficam no localStorage do navegador. Para produção, troque o DataStore por
    uma API/banco sem precisar reescrever a interface. */
 
-window.CATALOG_VERSION = "local";
-
 // Metadados compartilhados: as edições guardam apenas o que muda entre os arquivos.
 window.DEFAULT_SERIES = [
   {
@@ -890,44 +888,6 @@ window.DEFAULT_LIBRARY = [
     collectionIds: []
   },
   {
-    id: "hq-001",
-    title: "Casulo: Metamorfose",
-    issue: "Edição 01",
-    type: "comic",
-    author: "Autor",
-    publisher: "Casulo",
-    imprint: "Casulo Comics",
-    year: 2026,
-    description: "A primeira aventura do herói.",
-    coverUrl: "",
-    fileUrl: "Arquivos/Casulo-Metamorfose.pdf",
-    format: "pdf",
-    clicks: 0,
-    featured: true,
-    randomWeight: 8,
-    tags: ["super-herói", "ação", "origem"],
-    collectionIds: ["colecao-001"]
-  },
-  {
-    id: "hq-002",
-    title: "Surdina",
-    issue: "Edição 02",
-    type: "comic",
-    author: "Autor",
-    publisher: "Casulo",
-    imprint: "Casulo Comics",
-    year: 2026,
-    description: "Uma história urbana cheia de mistério.",
-    coverUrl: "",
-    fileUrl: "Arquivos/Btmn-3(2025).cbr",
-    format: "cbr",
-    clicks: 0,
-    featured: true,
-    randomWeight: 6,
-    tags: ["urbano", "mistério", "ação"],
-    collectionIds: ["colecao-001"]
-  },
-  {
     id: "absolute-batman-001",
     seriesId: "series-absolute-batman",
     title: "Absolute Batman",
@@ -1244,11 +1204,5 @@ window.DEFAULT_LIBRARY.forEach((item) => {
 });
 
 window.DEFAULT_COLLECTIONS = [
-  {
-    id: "colecao-001",
-    title: "Universo Casulo",
-    description: "Uma coletânea para ler várias aventuras em sequência.",
-    cover: "https://placehold.co/1200x500/19191e/ffffff?text=UNIVERSO+CASULO",
-    issueIds: ["hq-001", "hq-002", "hq-003"]
-  }
+  
 ];
