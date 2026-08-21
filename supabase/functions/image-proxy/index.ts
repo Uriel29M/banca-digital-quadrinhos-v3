@@ -13,7 +13,7 @@ function errorResponse(message: string, status: number) {
 
 function isAllowedImageHost(hostname: string) {
   const host = hostname.toLowerCase();
-  return host === "i.imgur.com" || host === "imgur.com" || host === "www.imgur.com";
+  return host === "i.imgur.com" || host === "imgur.com" || host === "www.imgur.com" || host === "zonafantasmanet.files.wordpress.com";
 }
 
 Deno.serve(async request => {
@@ -24,7 +24,7 @@ Deno.serve(async request => {
     const value = new URL(request.url).searchParams.get("url");
     if (!value) return errorResponse("Informe o parâmetro url.", 400);
     const source = new URL(value);
-    if (source.protocol !== "https:" || !isAllowedImageHost(source.hostname)) return errorResponse("A URL precisa apontar para uma imagem do Imgur.", 400);
+    if (source.protocol !== "https:" || !isAllowedImageHost(source.hostname)) return errorResponse("A URL precisa apontar para uma imagem autorizada.", 400);
     const upstream = await fetch(source, {
       headers: { Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8", Referer: "https://hqs-soquadrinhos.blogspot.com/" },
     });

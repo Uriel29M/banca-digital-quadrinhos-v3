@@ -6,6 +6,26 @@
   const DB_KEY = `bancaDigitalDB_v1:${window.CATALOG_VERSION || "local"}`;
   const DEFAULT_AVATAR_URL = "https://i.pinimg.com/736x/be/17/10/be1710edaace144c17bdaf6deb2d2cc8.jpg";
   const SERIES_FIELDS = ["seriesTitle", "author", "publisher", "imprint", "year", "description", "coverUrl", "telegramUrl", "tags", "type", "publication", "status", "editions", "character"];
+  const KNIGHT_TERRORS_VOLUME_GROUPS = [
+    ["Principal", 7], ["Batman", 2], ["Devastadora", 2], ["Coringa", 2],
+    ["Hera Venenosa", 2], ["Adão Negro", 2], ["Robin", 2], ["Flash", 2],
+    ["Zatanna", 2], ["Shazam", 2], ["Lanterna Verde", 2], ["Mulher-Maravilha", 2],
+    ["Superman", 2], ["Asa Noturna", 2], ["Mulher-Gato", 2], ["Anedota", 2],
+    ["Titãs", 2], ["Action Comics", 2], ["Detective Comics", 2], ["Arlequina", 2],
+    ["Algoz dos Anjos", 2]
+  ];
+
+  function knightTerrorsVolume(item) {
+    if (item?.seriesId !== "series-knight-terrors-2023") return null;
+    const issueIndex = Number(String(item.id || "").match(/-(\d+)$/)?.[1]) - 1;
+    if (!Number.isInteger(issueIndex) || issueIndex < 0) return null;
+    let offset = 0;
+    for (const [name, size] of KNIGHT_TERRORS_VOLUME_GROUPS) {
+      if (issueIndex < offset + size) return name;
+      offset += size;
+    }
+    return null;
+  }
 
   function materializeSeriesItems(items = []) {
     const series = new Map((window.DEFAULT_SERIES || []).map(entry => [entry.id, entry]));
@@ -32,8 +52,24 @@
         merged.issue = "3";
         merged.fileUrl = "https://www.mediafire.com/file/jixe3r7igaresw9/Arlequina_003_%25282021%2529_%2528S%25C3%25B3Quadrinhos%2529.cbr/file";
       }
+      if (merged.id === "series-justice-godzilla-kong-2023-08") {
+        merged.fileUrl = "https://mega.nz/file/XNISCRga#5NQNVbiHZER9AT6iE-8KG7nOEWBR3bpk2XxWKhFNO9s";
+      }
+      if (merged.seriesId === "series-batman-urban-legends-2021") {
+        const defaultItem = (window.DEFAULT_LIBRARY || []).find(entry => entry.id === merged.id);
+        if (defaultItem?.coverUrl) merged.coverUrl = defaultItem.coverUrl;
+      }
+      if (merged.seriesId === "series-absolute-power-2024") {
+        const defaultItem = (window.DEFAULT_LIBRARY || []).find(entry => entry.id === merged.id);
+        if (defaultItem?.coverUrl) merged.coverUrl = defaultItem.coverUrl;
+      }
       if (String(merged.id || "").startsWith("fury-of-firestorm-2026-") && !String(merged.fileUrl || "").endsWith("/file")) {
         merged.fileUrl = `${merged.fileUrl}/file`;
+      }
+      const knightVolume = knightTerrorsVolume(merged);
+      if (knightVolume) {
+        merged.volume = knightVolume;
+        merged.volumeTitle = knightVolume;
       }
       merged.seriesTitle = item.seriesTitle || definition.name || definition.seriesTitle;
       merged.title = item.title || merged.seriesTitle;
@@ -80,8 +116,26 @@
       try {
         const saved = JSON.parse(localStorage.getItem(DB_KEY));
         if (saved?.library && saved?.collections) {
+          const oldAbsolutePowerIds = new Map([
+            ["series-absolute-power-2024-02", "series-absolute-power-2024-01"],
+            ["series-absolute-power-2024-03", "series-absolute-power-2024-02"],
+            ["series-absolute-power-2024-04", "series-absolute-power-2024-03"],
+            ["series-absolute-power-2024-05", "series-absolute-power-2024-04"]
+          ]);
+          if (saved.library.some(item => item.id === "series-absolute-power-2024-05")) {
+            saved.library = saved.library
+              .filter(item => item.id !== "series-absolute-power-2024-01")
+              .map(item => oldAbsolutePowerIds.has(item.id) ? { ...item, id: oldAbsolutePowerIds.get(item.id) } : item);
+          }
           const defaultsById = new Map((window.DEFAULT_LIBRARY || []).map(item => [item.id, item]));
+          const previousLibrary = saved.library;
           saved.library = materializeSeriesItems(saved.library.map(item => ({ ...(defaultsById.get(item.id) || {}), ...item })));
+          const knightVolumesChanged = saved.library.some(item => {
+            const previous = previousLibrary.find(entry => entry.id === item.id);
+            return previous && (previous.volume !== item.volume || previous.volumeTitle !== item.volumeTitle);
+          });
+          if (knightVolumesChanged) this.save(saved);
+          if (saved.library.some(item => item.id === "series-justice-godzilla-kong-2023-08" && String(item.fileUrl || "").includes("bpk2XxWKhFNO9s"))) this.save(saved);
           const knownIds = new Set(saved.library.map(item => item.id));
           const newDefaults = materializeSeriesItems(structuredClone(window.DEFAULT_LIBRARY)).filter(item => !knownIds.has(item.id));
           if (newDefaults.length) {
@@ -2195,7 +2249,7 @@
     }
   }
 
-  async function renderCBZReader(item, url, body, controls, overlay, skipCover = false, resumePage = 1, onPageChange = () => {}) {
+  async function renderCBZReader(item, url, body, controls, overlay, skipCover = false, resumePage = 1, onPageChange = () => {}, prefetchedBuffer = null) {
     const downloadController = new AbortController();
     overlay._cbzDownloadController = downloadController;
     let progressRoot;
@@ -2236,6 +2290,9 @@
     showCbzProgress("Baixando páginas do CBZ…");
     try {
       if (!window.JSZip) throw new Error("JSZip não carregou.");
+      let buffer = prefetchedBuffer;
+      if (buffer) showCbzProgress("Arquivo CBZ baixado. Preparando p\u00e1ginas...", 100, "Download conclu\u00eddo");
+      if (!buffer) {
       const response = await fetch(proxiedFileUrl(url), {
         method: "GET",
         mode: "cors",
@@ -2244,7 +2301,6 @@
         signal: downloadController.signal
       });
       if (!response.ok) throw new Error("HTTP " + response.status);
-      let buffer;
       const contentLength = Number(response.headers.get("content-length")) || 0;
       if (response.body && contentLength) {
         const reader = response.body.getReader();
@@ -2263,6 +2319,7 @@
         buffer = bytes.buffer;
       } else {
         buffer = await response.arrayBuffer();
+      }
       }
       const zip = await JSZip.loadAsync(buffer);
       const names = Object.keys(zip.files)
@@ -2650,7 +2707,7 @@
       } else {
         if (isZipContainer) {
           status("Arquivo ZIP detectado. Abrindo como CBZ…");
-          return renderCBZReader(item, url, body, controls, overlay, skipCover, resumePage, onPageChange);
+          return renderCBZReader(item, url, body, controls, overlay, skipCover, resumePage, onPageChange, buffer);
         }
         status("Formato compactado detectado. Preparando leitor…");
       }
@@ -3285,7 +3342,7 @@
   }
 
   function coverCacheKey(item, maxWidth) {
-    return `banca-cover:${maxWidth}:${item.id}:${item.fileUrl || item.telegramUrl || ""}`;
+    return `banca-cover:v3:${maxWidth}:${item.id}:${item.fileUrl || item.telegramUrl || ""}`;
   }
 
   function directFileUrl(item) {
@@ -3354,7 +3411,7 @@
 
   function proxiedImageUrl(url) {
     const source = String(url || "");
-    if (!window.BANCA_SUPABASE_URL || !/^https:\/\/(?:i\.imgur\.com|(?:www\.)?imgur\.com)\//i.test(source)) return source;
+    if (!window.BANCA_SUPABASE_URL || !/^https:\/\/(?:i\.imgur\.com|(?:www\.)?imgur\.com|zonafantasmanet\.files\.wordpress\.com)\//i.test(source)) return source;
     const proxy = new URL(`${window.BANCA_SUPABASE_URL}/functions/v1/image-proxy`);
     proxy.searchParams.set("url", source);
     return proxy.toString();
