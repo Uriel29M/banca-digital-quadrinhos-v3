@@ -166,6 +166,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font-size: 12px;
   transform: rotate(-3deg);
 }
+.brand-logo { width: 100%; height: 100%; object-fit: contain; border-radius: 6px; display: block; }
 .brand-accent { color: #ff5962; }
 .main-nav { display: flex; gap: 6px; align-items: center; flex: 1; }
 .nav-link {
@@ -704,6 +705,10 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 .series-card-footer { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
 .best-series-section .results-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; overflow: hidden; }
 .best-series-section .series-card { min-width: 0; }
+.best-series-section { position: relative; isolation: isolate; margin: 0 -4vw 42px; padding: 38px 4vw 46px; background: url('../assets/papercomicsbackgroung.jpg') center / cover no-repeat; clip-path: polygon(0 3%, 4% 1%, 8% 2.5%, 13% 0, 18% 2%, 24% 1%, 30% 2.5%, 37% 0.5%, 44% 2%, 51% 1%, 58% 2.5%, 65% 0, 72% 2%, 79% 1%, 86% 2.5%, 93% 0.5%, 100% 2%, 100% 98%, 94% 99.5%, 88% 97.5%, 81% 100%, 74% 98%, 67% 99.5%, 60% 97%, 53% 100%, 46% 98%, 39% 99.5%, 32% 97%, 25% 100%, 18% 98%, 11% 99.5%, 5% 97%, 0 99%); }
+.best-series-section::before { content: ''; position: absolute; z-index: -1; inset: 0; background: rgba(12, 12, 16, .42); }
+.best-series-section .section-title, .best-series-section .section-subtitle { color: white; -webkit-text-stroke: .3px #111114; text-shadow: 0 1px 1px rgba(0,0,0,.45); }
+.best-series-section .series-card { box-shadow: 0 10px 24px rgba(0,0,0,.42), 0 2px 5px rgba(0,0,0,.3); }
 .series-save-button { margin-left: auto; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 10px; }
 .series-save-button:hover, .series-save-button.is-saved { border-color: #ffd45c; color: #ffd45c; }
 .reader-comments { max-height: 280px; overflow-y: auto; padding: 0 18px; background: linear-gradient(180deg, #15151a, #111114); border-top: 1px solid #29292f; }
