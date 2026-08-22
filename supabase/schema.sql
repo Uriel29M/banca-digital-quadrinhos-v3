@@ -249,6 +249,11 @@ create table if not exists public.comic_cover_variants (
   primary key (item_id, variant_key)
 );
 
+alter table public.comic_cover_variants drop constraint if exists comic_cover_variants_cover_url_check;
+alter table public.comic_cover_variants add constraint comic_cover_variants_cover_url_check check (
+  cover_url ~ '^https://(www[.]|media[.])?(static[.]dc[.]com|files[12][.]comics[.]org|storage[.]googleapis[.]com|dcuguide[.]com|thepopverse[.]com|comicstoastonish[.]com|static[.]pulps[.]fr|sanctumsanctorumcomics[.]com|goldenapplecomics[.]com|blackdragoncomix[.]com|midtowncomics[.]com|everythingcomics[.]ca|thecomicmint[.]com|mlpnk72yciwc[.]i[.]optimole[.]com|media[.]forbiddenplanet[.]com|image[.]keycollectorcomics[.]com|comics[.]forbiddenplanet[.]co[.]uk)/'
+);
+
 create table if not exists public.user_cover_choices (
   user_id uuid not null references public.profiles(id) on delete cascade,
   item_id text not null,
@@ -257,6 +262,10 @@ create table if not exists public.user_cover_choices (
   cover_url text not null check (cover_url ~ '^https://static[.]dc[.]com/'),
   updated_at timestamptz not null default now(),
   primary key (user_id, item_id)
+);
+alter table public.user_cover_choices drop constraint if exists user_cover_choices_cover_url_check;
+alter table public.user_cover_choices add constraint user_cover_choices_cover_url_check check (
+  cover_url ~ '^https://(www[.]|media[.])?(static[.]dc[.]com|files[12][.]comics[.]org|storage[.]googleapis[.]com|dcuguide[.]com|thepopverse[.]com|comicstoastonish[.]com|static[.]pulps[.]fr|sanctumsanctorumcomics[.]com|goldenapplecomics[.]com|blackdragoncomix[.]com|midtowncomics[.]com|everythingcomics[.]ca|thecomicmint[.]com|mlpnk72yciwc[.]i[.]optimole[.]com|media[.]forbiddenplanet[.]com|image[.]keycollectorcomics[.]com|comics[.]forbiddenplanet[.]co[.]uk)/'
 );
 create index if not exists user_cover_choices_item_idx on public.user_cover_choices(item_id);
 

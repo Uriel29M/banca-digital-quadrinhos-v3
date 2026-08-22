@@ -894,12 +894,19 @@
     if (!sb) return;
     const result = await sb.from("comic_cover_variants").select("item_id, variant_key, label, cover_url, source_url").order("label", { ascending: true });
     if (result.error) {
+      console.warn("Não foi possível carregar as capas variantes do Supabase:", result.error.message);
       state.coverVariants = new Map();
       return;
     }
     state.coverVariants = (result.data || []).reduce((map, variant) => {
-      if (!map.has(variant.item_id)) map.set(variant.item_id, []);
-      map.get(variant.item_id).push(variant);
+      // Compatibilidade com as linhas antigas gravadas com três dígitos.
+      const itemId = {
+        "war-earth-3-2022-001": "war-earth-3-2022-01",
+        "war-earth-3-2022-002": "war-earth-3-2022-02"
+      }[variant.item_id] || variant.item_id;
+      const normalizedVariant = itemId === variant.item_id ? variant : { ...variant, item_id: itemId };
+      if (!map.has(itemId)) map.set(itemId, []);
+      map.get(itemId).push(normalizedVariant);
       return map;
     }, new Map());
   }
@@ -1184,14 +1191,25 @@
     render();
   }
 
+  function usableCoverVariants(item) {
+    const mainCoverUrl = String(item?.coverUrl || "").trim();
+    return (state.coverVariants.get(item?.id) || []).filter(variant => {
+      const coverUrl = String(variant.cover_url || "").trim();
+      return coverUrl && coverUrl !== mainCoverUrl;
+    });
+  }
+
   function openCoverChoice(itemId) {
+    const existingOverlay = $("#modal-root .cover-choice-modal")?.closest(".modal-backdrop");
+    if (existingOverlay) return;
     if (!state.session) return openAuthPage();
     if (!["premium", "moderator", "admin"].includes(state.profile?.plan)) return toast("A escolha de capas variantes é exclusiva para usuários Premium, moderadores e administradores.");
-    if (!state.favoriteIds.has(itemId)) return toast("Salve o quadrinho na estante antes de escolher uma capa.");
     const item = state.db.library.find(entry => entry.id === itemId);
     if (!item) return;
+    const savedForCover = state.favoriteIds.has(itemId) || (item.seriesId && state.favoriteIds.has(item.seriesId));
+    if (!savedForCover) return toast("Salve o quadrinho ou a série na estante antes de escolher uma capa.");
     const current = state.coverChoices.get(itemId);
-    const variants = state.coverVariants.get(itemId) || [];
+    const variants = usableCoverVariants(item);
     const options = [{ variant_key: "__default", label: "Capa principal", cover_url: item.coverUrl || "" }, ...variants];
     const overlay = document.createElement("div");
     overlay.className = "modal-backdrop";
@@ -1213,9 +1231,19 @@
         state.coverChoices.set(itemId, { item_id: itemId, ...choice });
       } else return toast("Essa capa variante não está cadastrada para esta edição.");
       overlay.remove();
-      render();
+      updateCoverChoiceImages(itemId);
       toast("Capa atualizada.");
     };
+  }
+
+  function updateCoverChoiceImages(itemId) {
+    const item = state.db.library.find(entry => entry.id === itemId);
+    if (!item) return;
+    const cover = coverFor(item);
+    $$('[data-cover-id]').filter(element => element.dataset.coverId === itemId).forEach(element => {
+      element.dataset.coverReady = "true";
+      element.style.backgroundImage = `url("${cover}")`;
+    });
   }
 
   function updateFavoriteButtons(itemId) {
@@ -3543,7 +3571,15 @@
   }
 
   function proxiedImageUrl(url) {
-    const source = String(url || "");
+    const legacyCoverUrls = {
+      "https://storage.googleapis.com/hipcomic/p/622e297bf53964d785dedfd21b923bb4-800.jpg": "https://www.comicsbox.it/cover/SHWRALPHA_001C.jpg",
+      "https://dcuguide.com/Special:FilePath/Shadow_War_Alpha_1_%28Cover_B%29.png": "https://www.comicsbox.it/cover/SHWRALPHA_001B.jpg",
+      "https://storage.googleapis.com/hipcomic/p/b683dbd84fe7e1f28c831ec91e6e6d22-800.jpg": "https://www.comicsbox.it/cover_dc/BATMAN3_122C.jpg",
+      "https://dcuguide.com/Special:FilePath/Shadow_War_Omega_1_%28Cover_B%29.png": "https://www.comicsbox.it/cover_dc/SHWROMEGA_001B.jpg",
+      "https://dcuguide.com/Special:FilePath/Shadow_War_Omega_1_%28Cover_C%29.png": "https://www.comicsbox.it/cover_dc/SHWROMEGA_001C.jpg",
+    };
+    const rawSource = String(url || "").trim();
+    const source = legacyCoverUrls[rawSource] || rawSource;
     if (!window.BANCA_SUPABASE_URL || !/^https:\/\/(?:i\.imgur\.com|(?:www\.)?imgur\.com|zonafantasmanet\.files\.wordpress\.com)\//i.test(source)) return source;
     const proxy = new URL(`${window.BANCA_SUPABASE_URL}/functions/v1/image-proxy`);
     proxy.searchParams.set("url", source);
@@ -3686,13 +3722,14 @@
     else observeDeferred();
   }
 
-  function card(item, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, directOpen = false, coverChoices = null) {
+  function card(item, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, directOpen = false, coverChoices = null, seriesContext = false) {
     const completed = progressFor(item, progressMap)?.completed;
     const displayTitle = itemDisplayTitle(item);
     const issueLabel = itemIssueLabel(item);
-    const coverVariants = state.coverVariants.get(item.id) || [];
+    const coverVariants = usableCoverVariants(item);
     const hasCoverVariants = coverVariants.length > 0;
-    const canChooseCover = state.session && ["premium", "moderator", "admin"].includes(state.profile?.plan) && favoriteIds === state.favoriteIds && state.favoriteIds.has(item.id) && hasCoverVariants;
+    const savedForCover = favoriteIds.has(item.id) || (seriesContext && item.seriesId && favoriteIds.has(item.seriesId));
+    const canChooseCover = state.session && ["premium", "moderator", "admin"].includes(state.profile?.plan) && favoriteIds === state.favoriteIds && savedForCover && hasCoverVariants;
     const authors = String(item.author || "").split(/\s*(?:\/|&|\be\b)\s*/i).map(value => value.trim()).filter(Boolean);
     const entityButton = (kind, value, label = value) => value ? `<button type="button" class="card-entity-link" data-entity-kind="${escapeHTML(kind)}" data-entity-value="${escapeHTML(value)}">${escapeHTML(label)}</button>` : "";
     return `
@@ -4251,9 +4288,9 @@
   function renderShelfPage() {
     if (!state.session) return renderLoginPage();
     const snapshot = ensureShelfSnapshot();
-    const savedItems = shelfItemsByIds([...snapshot.saved].filter(id => !isSeriesId(id)), false).map(item => ({ ...item, seriesId: null }));
+    const savedItems = shelfItemsByIds([...snapshot.saved].filter(id => !isSeriesId(id)), false);
     const savedSeries = shelfItemsByIds([...snapshot.saved].filter(isSeriesId), true);
-    const readItems = shelfItemsByIds([...snapshot.read]).map(item => ({ ...item, seriesId: null }));
+    const readItems = shelfItemsByIds([...snapshot.read]);
     const completedItems = completedSeriesItems(state.readingProgress);
     const canCustomize = ["admin", "moderator", "premium"].includes(state.profile?.plan);
     const categories = state.shelfCategories.map(category => ({ ...category, itemIds: (category.itemIds || []).filter(id => snapshot.saved.has(id)) }));
@@ -4400,10 +4437,10 @@
     const readVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_read_public !== false;
     const completedVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_completed_public !== false;
     const likedVisible = !["admin", "moderator", "premium"].includes(profile.plan) || profile.shelf_liked_public !== false;
-    const savedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.favoriteIds.has(item.id))).map(item => ({ ...item, seriesId: null }));
+    const savedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.favoriteIds.has(item.id)));
     const savedSeries = shelfItemsByIds([...publicState.favoriteIds].filter(isSeriesId), true);
-    const readItems = uniqueCatalogItems(state.db.library.filter(item => publicState.readingProgress.get(item.id)?.completed)).map(item => ({ ...item, seriesId: null }));
-    const likedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.comicLikeIds?.has(item.id))).map(item => ({ ...item, seriesId: null }));
+    const readItems = uniqueCatalogItems(state.db.library.filter(item => publicState.readingProgress.get(item.id)?.completed));
+    const likedItems = uniqueCatalogItems(state.db.library.filter(item => publicState.comicLikeIds?.has(item.id)));
     const completedItems = completedSeriesItems(publicState.readingProgress);
     const publicCategories = (publicState.collections || []).filter(category => category.isPublic !== false);
     const publicBlogCollections = (publicState.blogCollections || []).filter(collection => collection.isPublic !== false);
@@ -4524,7 +4561,7 @@
     const collection = state.db.collections.find(item => item.id === state.collectionId);
     if (!collection) return renderCollections();
     const items = collection.issueIds.map(id => state.db.library.find(item => item.id === id)).filter(Boolean);
-    return `<div class="content"><div class="section-head"><div><div class="eyebrow">Coleção</div><h1 class="section-title">${escapeHTML(collection.title)}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div><button class="small-btn" data-section="collections">Voltar às coleções</button></div><p class="section-subtitle">${escapeHTML(collection.description || "")}</p><div class="results-grid">${items.map(item => card(item)).join("") || '<div class="empty">Coleção vazia.</div>'}</div></div>`;
+    return `<div class="content collection-page"><div class="section-head"><div><div class="eyebrow">Coleção</div><h1 class="section-title">${escapeHTML(collection.title)}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div><button class="small-btn" data-section="collections">Voltar às coleções</button></div><p class="section-subtitle">${escapeHTML(collection.description || "")}</p><div class="results-grid">${items.map(item => card(item)).join("") || '<div class="empty">Coleção vazia.</div>'}</div></div>`;
   }
 
   async function markNotificationRead(notificationId) {
@@ -4738,7 +4775,11 @@
     $$('.local-box-nav').forEach(button => { button.style.display = state.session && state.localBoxVisible ? "" : "none"; });
     $$('[data-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleFavorite(el.dataset.favorite); }));
     $$('[data-series-favorite]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); toggleSeriesFavorite(el.dataset.seriesFavorite); }));
-    $$('[data-cover-choice]').forEach(el => el.addEventListener("click", event => { event.stopPropagation(); openCoverChoice(el.dataset.coverChoice); }));
+    $$('[data-cover-choice]').forEach(el => {
+      if (el.dataset.coverChoiceBound) return;
+      el.dataset.coverChoiceBound = "true";
+      el.addEventListener("click", event => { event.stopPropagation(); openCoverChoice(el.dataset.coverChoice); });
+    });
     $$('[data-read-item]').forEach(el => el.addEventListener("click", event => {
       event.stopPropagation();
       const item = state.db.library.find(x => x.id === el.dataset.readItem);
@@ -5036,7 +5077,7 @@
     const volumeTabs = volumeEntries.length > 1
       ? `<div class="series-volume-tabs">${volumeEntries.map(([label], index) => `<button class="small-btn ${index === 0 ? "is-active" : ""}" type="button" data-series-volume-tab="${index}">${escapeHTML(label)}</button>`).join("")}</div>`
       : "";
-    const volumePanels = volumeEntries.map(([label, items], index) => `<div class="series-volume-panel" data-series-volume-panel="${index}" ${index ? "hidden" : ""}><div class="section-subtitle series-volume-heading">${escapeHTML(label)}</div><div class="results-grid">${items.map(item => card(item)).join("")}</div></div>`).join("");
+    const volumePanels = volumeEntries.map(([label, items], index) => `<div class="series-volume-panel" data-series-volume-panel="${index}" ${index ? "hidden" : ""}><div class="section-subtitle series-volume-heading">${escapeHTML(label)}</div><div class="results-grid">${items.map(item => card(item, state.readingProgress, state.favoriteIds, false, null, true)).join("")}</div></div>`).join("");
     overlay.innerHTML = `
       <div class="modal series-modal">
         <div class="section-head">
@@ -5047,15 +5088,22 @@
       </div>`;
     $("#modal-root").appendChild(overlay);
     hydrateHomeCovers();
+    overlay.addEventListener("click", event => {
+      if (event.target === overlay) overlay.remove();
+    });
     $("[data-close]", overlay).onclick = () => overlay.remove();
     $$('[data-open]', overlay).forEach(el => el.addEventListener("click", () => {
       overlay.remove();
       openReader(state.db.library.find(x => x.id === el.dataset.open));
     }));
-    $$('[data-cover-choice]', overlay).forEach(el => el.addEventListener("click", event => {
-      event.stopPropagation();
-      openCoverChoice(el.dataset.coverChoice);
-    }));
+    $$('[data-cover-choice]', overlay).forEach(el => {
+      if (el.dataset.coverChoiceBound) return;
+      el.dataset.coverChoiceBound = "true";
+      el.addEventListener("click", event => {
+        event.stopPropagation();
+        openCoverChoice(el.dataset.coverChoice);
+      });
+    });
     $$('[data-favorite]', overlay).forEach(el => el.addEventListener("click", event => {
       event.stopPropagation();
       toggleFavorite(el.dataset.favorite);
