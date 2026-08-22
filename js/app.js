@@ -5075,7 +5075,7 @@
     syncTopAvatar();
     $$('[data-action="open-admin"]').forEach(button => { button.style.display = canManage ? "" : "none"; });
     $$('[data-action="submit"]').forEach(button => { button.style.display = isAdmin ? "" : "none"; });
-    $$('.messages-nav').forEach(button => { button.style.display = state.session ? "" : "none"; });
+    $$('.messages-nav, .messages-mobile-btn').forEach(button => { button.style.display = state.session ? "" : "none"; });
     $$('.notification-bell').forEach(button => {
       button.style.display = state.session ? "" : "none";
       const badge = $(".notification-badge", button);

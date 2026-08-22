@@ -179,6 +179,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .nav-link:hover, .nav-link.active { color: white; background: #17171b; }
 .top-actions { display: flex; gap: 8px; align-items: center; }
+.messages-mobile-btn { display: none; }
 .icon-btn, .reader-btn, .avatar {
   border: 1px solid var(--line);
   background: var(--surface-2);
@@ -1240,7 +1241,7 @@ input:disabled { opacity: .45; cursor: not-allowed; }
 
 @media (max-width: 1000px) {
   .topbar { height: auto; min-height: 68px; flex-wrap: wrap; padding-top: 10px; padding-bottom: 8px; }
-  .main-nav { display: flex; order: 3; flex: 0 0 100%; flex-wrap: wrap; gap: 3px; max-height: none; overflow: visible; padding-top: 4px; }
+  .main-nav { display: flex; order: 3; flex: 0 0 100%; flex-wrap: wrap; justify-content: center; gap: 3px; max-height: none; overflow: visible; padding-top: 4px; }
   .nav-link { flex: 0 0 auto; padding: 7px 8px; font-size: 12px; white-space: nowrap; }
   .feature-grid { grid-template-columns: repeat(2, 1fr); }
   .rail-viewport { width: min(100%, calc(3 * var(--media-card-width) + 50px)); }
@@ -1256,6 +1257,9 @@ input:disabled { opacity: .45; cursor: not-allowed; }
   .moderation-grid, .moderation-button-grid, .moderation-title-fields { grid-template-columns: 1fr; }
   .moderation-modal { width: min(100%, calc(100vw - 24px)); }
   .topbar { padding: 10px 14px 8px; gap: 10px; }
+  .main-nav .nav-link[data-section="home"] { display: none; }
+  .main-nav .messages-nav { display: none !important; }
+  .messages-mobile-btn { display: grid; place-items: center; }
   .top-actions { margin-left: auto; }
   .reader-btn { display: none; }
   .reader-top {
@@ -1280,6 +1284,8 @@ input:disabled { opacity: .45; cursor: not-allowed; }
   .hero { min-height: 420px; padding: 55px 20px 40px; }
   .hero-cover { right: 15px; width: 40vw; opacity: .42; }
   .hero-content { width: 70%; }
+  .hero-content > .btn { display: block; width: fit-content; }
+  .hero-content > .btn + .btn { margin-top: 12px; }
   .public-collection-hero { padding: 22px; gap: 15px; }
   .public-collection-icon { width: 76px; height: 76px; flex-basis: 76px; font-size: 36px; }
   .collection-filter { align-items: stretch; flex-direction: column; }
