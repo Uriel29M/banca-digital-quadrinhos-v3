@@ -697,13 +697,13 @@
     bindBlogCommentThread(overlay, post, list, refresh);
   }
 
-  function blogEngagementMarkup(post) {
+  function blogEngagementMarkup(post, showComments = true) {
     const id = String(post.id);
     const liked = state.blogLikeIds.has(id);
     const likes = state.blogLikeCounts.get(id) || 0;
     const comments = state.blogCommentCounts.get(id) || 0;
     const saved = state.blogSaveIds.has(id);
-    return `<div class="blog-engagement"><button class="small-btn ${liked ? "is-liked" : ""}" data-blog-like="${escapeHTML(id)}">${liked ? "♥" : "♡"} ${likes}</button><button class="small-btn ${saved ? "is-liked" : ""}" data-blog-save="${escapeHTML(id)}">${saved ? "★ Salvo" : "☆ Salvar"}</button><button class="small-btn" data-blog-comments="${escapeHTML(id)}">Comentários · ${comments}</button><button class="small-btn" data-blog-share="${escapeHTML(id)}">Compartilhar</button></div>`;
+    return `<div class="blog-engagement"><button class="small-btn ${liked ? "is-liked" : ""}" data-blog-like="${escapeHTML(id)}">${liked ? "♥" : "♡"} ${likes}</button><button class="small-btn ${saved ? "is-liked" : ""}" data-blog-save="${escapeHTML(id)}">${saved ? "★ Salvo" : "☆ Salvar"}</button>${showComments ? `<button class="small-btn" data-blog-comments="${escapeHTML(id)}">Comentários · ${comments}</button>` : ""}<button class="small-btn" data-blog-share="${escapeHTML(id)}">Compartilhar</button></div>`;
   }
 
   function blogCard(post, featured = false) {
@@ -856,7 +856,7 @@
     const author = post.author || {};
     const staff = ["moderator", "admin"].includes(state.profile?.plan);
     const canDelete = staff || state.session?.user?.id === post.author_id;
-    return `<div class="content blog-post-page"><div class="section-head"><div><div class="eyebrow">${post.is_featured ? "Blog em destaque" : "Blog"}</div><h1 class="section-title">${escapeHTML(post.title)}</h1><div class="section-subtitle">@${escapeHTML(author.username || "usuário")} · ${escapeHTML(blogDate(post.published_at || post.created_at))}</div></div><button class="small-btn" data-blog-back>Voltar aos blogs</button></div><div class="blog-post-gallery"><div class="blog-post-cover ${post.cover_url ? "has-image" : ""}" ${blogImageStyle(post.cover_url)}></div><div class="blog-post-side"><div class="blog-post-side-image ${post.image_2_url ? "has-image" : ""}" ${blogImageStyle(post.image_2_url)}></div><div class="blog-post-side-image ${post.image_3_url ? "has-image" : ""}" ${blogImageStyle(post.image_3_url)}></div></div></div>${post.excerpt ? `<p class="blog-post-excerpt">${escapeHTML(post.excerpt)}</p>` : ""}<article class="blog-post-content">${safeBlogHtml(post.content_html)}</article>${blogEngagementMarkup(post)}${staff ? `<button class="small-btn" data-blog-feature="${escapeHTML(post.id)}" data-blog-featured="${post.is_featured ? "true" : "false"}">${post.is_featured ? "Remover destaque" : "Destacar blog"}</button>` : ""}${canDelete ? `<button class="small-btn danger blog-delete-button" data-blog-delete="${escapeHTML(post.id)}">Apagar blog</button>` : ""}${blogAuthorMarkup(post)}</div>`;
+    return `<div class="content blog-post-page"><div class="section-head"><div><div class="eyebrow">${post.is_featured ? "Blog em destaque" : "Blog"}</div><h1 class="section-title">${escapeHTML(post.title)}</h1><div class="section-subtitle">@${escapeHTML(author.username || "usuário")} · ${escapeHTML(blogDate(post.published_at || post.created_at))}</div></div><button class="small-btn" data-blog-back>Voltar aos blogs</button></div><div class="blog-post-gallery"><div class="blog-post-cover ${post.cover_url ? "has-image" : ""}" ${blogImageStyle(post.cover_url)}></div><div class="blog-post-side"><div class="blog-post-side-image ${post.image_2_url ? "has-image" : ""}" ${blogImageStyle(post.image_2_url)}></div><div class="blog-post-side-image ${post.image_3_url ? "has-image" : ""}" ${blogImageStyle(post.image_3_url)}></div></div></div>${post.excerpt ? `<p class="blog-post-excerpt">${escapeHTML(post.excerpt)}</p>` : ""}<article class="blog-post-content">${safeBlogHtml(post.content_html)}</article><div class="blog-post-actions">${blogEngagementMarkup(post, false)}${staff ? `<button class="small-btn" data-blog-feature="${escapeHTML(post.id)}" data-blog-featured="${post.is_featured ? "true" : "false"}">${post.is_featured ? "Remover destaque" : "Destacar blog"}</button>` : ""}${canDelete ? `<button class="small-btn danger blog-delete-button" data-blog-delete="${escapeHTML(post.id)}">Apagar blog</button>` : ""}</div>${blogAuthorMarkup(post)}</div>`;
   }
 
   function renderBlogsPage() {
@@ -4218,10 +4218,18 @@
 
   function shelfCollectionMarkup(title, items, key, progressMap = state.readingProgress, favoriteIds = state.favoriteIds, actions = "", coverChoices = null, renderSeriesCards = false) {
     const expanded = Boolean(state.shelfExpanded[key]);
-    const visibleItems = expanded ? items : items.slice(0, SHELF_PREVIEW_LIMIT);
+    const fixedCollection = ["saved", "series-saved", "read", "completed", "liked", "public-saved", "public-series-saved", "public-read", "public-completed", "public-liked"].includes(key)
+      || key.startsWith("category:")
+      || key.startsWith("public-category:");
+    const visibleItems = fixedCollection || expanded ? items : items.slice(0, SHELF_PREVIEW_LIMIT);
     const likedCollection = key === "read" && state.section === "shelf" ? shelfCollectionMarkup("Curtidas", shelfItemsByIds([...state.comicLikeIds]), "liked") : "";
     const directOpen = state.section === "shelf" || (state.section === "public-profile" && state.publicProfile?.collectionId);
-    return `<section class="section shelf-collection"><div class="section-head"><div><h2 class="section-title">${escapeHTML(title)}</h2><div class="section-subtitle">${items.length} item(ns)</div></div><div class="shelf-section-actions">${actions}${items.length > SHELF_PREVIEW_LIMIT ? `<button class="small-btn" data-shelf-expand="${escapeHTML(key)}">${expanded ? "Mostrar menos" : "Ver todos"}</button>` : ""}</div></div><div class="results-grid">${visibleItems.map(item => renderSeriesCards && item.seriesId ? seriesCard(item, favoriteIds) : card(item, progressMap, favoriteIds, directOpen, coverChoices)).join("") || '<div class="empty">Nenhum item nesta coleção.</div>'}</div></section>${likedCollection}`;
+    const publicCategoryId = key.startsWith("public-category:") ? key.slice("public-category:".length) : "";
+    const publicCategory = publicCategoryId ? state.publicProfile?.collections?.find(category => category.id === publicCategoryId) : null;
+    const featureAction = publicCategory && ["moderator", "admin"].includes(state.profile?.plan)
+      ? `<button class="small-btn" data-collection-feature="${escapeHTML(publicCategory.id)}" data-collection-featured="${publicCategory.is_featured ? "true" : "false"}">${publicCategory.is_featured ? "Remover destaque" : "Destacar"}</button>`
+      : "";
+    return `<section class="section shelf-collection${fixedCollection ? " shelf-fixed-collection" : ""}"><div class="section-head"><div><h2 class="section-title">${escapeHTML(title)}</h2><div class="section-subtitle">${items.length} item(ns)</div></div><div class="shelf-section-actions">${actions}${featureAction}${!fixedCollection && items.length > SHELF_PREVIEW_LIMIT ? `<button class="small-btn" data-shelf-expand="${escapeHTML(key)}">${expanded ? "Mostrar menos" : "Ver todos"}</button>` : ""}</div></div><div class="results-grid${fixedCollection ? " shelf-fixed-grid" : ""}">${visibleItems.map(item => renderSeriesCards && item.seriesId ? seriesCard(item, favoriteIds) : card(item, progressMap, favoriteIds, directOpen, coverChoices)).join("") || '<div class="empty">Nenhum item nesta coleção.</div>'}</div></section>${likedCollection}`;
   }
 
   function isSeriesId(id) {
@@ -4283,10 +4291,14 @@
     return room.access === "premium" ? "Premium" : room.access === "staff" ? "Staff" : "Público";
   }
 
+  function chatBodyMarkup(body) {
+    return escapeHTML(String(body || "")).replace(/@([A-Za-z0-9_]{3,24})/g, (match, mentionedUsername) => `<a class="comment-mention" href="${escapeHTML(publicProfileHref(mentionedUsername))}" target="_blank" rel="noopener">${match}</a>`);
+  }
+
   function chatMessageMarkup(message, profile = {}) {
     const username = cleanUsername(profile.username || "usuário");
     const title = String(profile.title || "").trim();
-    return `<div class="chat-message ${message.sender_id === state.session.user.id ? "is-mine" : ""}"><a class="chat-message-author" href="${escapeHTML(publicProfileHref(username))}" target="_blank" rel="noopener">${avatarMarkup({ ...profile, username }, "chat-message-avatar")}<span><b>@${escapeHTML(username)}</b>${title ? `<em style="--title-bg:${safeTitleColor(profile.title_color)}">${escapeHTML(title)}</em>` : ""}</span></a><div>${escapeHTML(message.body)}</div><small>${escapeHTML(formatCommentDate(message.created_at))}</small></div>`;
+    return `<div class="chat-message ${message.sender_id === state.session.user.id ? "is-mine" : ""}"><a class="chat-message-author" href="${escapeHTML(publicProfileHref(username))}" target="_blank" rel="noopener">${avatarMarkup({ ...profile, username }, "chat-message-avatar")}<span><b>@${escapeHTML(username)}</b>${title ? `<em style="--title-bg:${safeTitleColor(profile.title_color)}">${escapeHTML(title)}</em>` : ""}</span></a><div>${chatBodyMarkup(message.body)}</div><small>${escapeHTML(formatCommentDate(message.created_at))}</small></div>`;
   }
 
   async function openChatRoom(room) {
@@ -4308,6 +4320,14 @@
     };
     $("[data-close]", overlay).onclick = close;
     const messagesRoot = $("[data-chat-messages]", overlay);
+    const chatInput = $("#chat-room-compose textarea", overlay);
+    const resizeChatInput = () => {
+      if (!chatInput) return;
+      chatInput.style.height = "auto";
+      chatInput.style.height = `${chatInput.scrollHeight}px`;
+    };
+    chatInput?.addEventListener("input", resizeChatInput);
+    resizeChatInput();
     const renderMessages = async () => {
       const result = await sb.from("chat_messages").select("id, sender_id, body, created_at, profiles!chat_messages_sender_id_fkey(username, avatar_url, title, title_color, plan)").eq("room_id", room.id).gt("expires_at", new Date().toISOString()).order("created_at", { ascending: true }).limit(200);
       if (result.error) return messagesRoot.innerHTML = '<div class="empty">Não foi possível carregar as mensagens.</div>';
@@ -4326,7 +4346,7 @@
       button.disabled = true;
       const result = await sb.from("chat_messages").insert({ sender_id: state.session.user.id, room_id: room.id, recipient_id: null, body, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
       if (result.error) { console.error("[chat room] erro ao enviar mensagem", result.error); toast(result.error.message || "Não foi possível enviar a mensagem."); }
-      else { awardProfileXp("chat", `chat:${Date.now()}`); composeForm.reset(); await renderMessages(); }
+      else { awardProfileXp("chat", `chat:${Date.now()}`); composeForm.reset(); resizeChatInput(); await renderMessages(); }
       button.disabled = false;
     };
   }
@@ -4885,6 +4905,7 @@
     overlay.className = "modal-backdrop";
     overlay.innerHTML = `<div class="modal notifications-popup-modal"><div class="section-head"><div><h2>Notificações</h2><div class="section-subtitle">${state.notificationUnreadCount} não lida(s)</div></div><button class="small-btn" data-close>Fechar</button></div>${renderNotifications()}</div>`;
     $("#modal-root").appendChild(overlay);
+    overlay.addEventListener("click", event => { if (event.target === overlay) overlay.remove(); });
     $$('[data-close]', overlay).forEach(button => button.onclick = event => {
       event.preventDefault();
       event.stopPropagation();
@@ -5712,7 +5733,7 @@
     const series = uniqueCatalogItems(items.filter(x => x.seriesId));
     const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
     const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
-    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
+    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid${type === "comic" && isSeries ? " catalog-series-grid" : ""}">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
     const publishers = new Map();
     items.filter(item => String(item.publisher || "").trim()).forEach(item => {
       const publisher = String(item.publisher).trim();
@@ -5914,7 +5935,7 @@
     const series = uniqueCatalogItems(items.filter(x => x.seriesId));
     const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
     const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
-    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
+    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid${type === "comic" && isSeries ? " catalog-series-grid" : ""}">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
     return `<div class="content"><div class="section-head"><div><h1 class="section-title">${heading}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div></div>${group("Séries", series, true)}${group("Oneshots", oneshots)}${!items.length ? `<div class="empty">Nenhuma edição cadastrada.</div>` : ""}</div>`;
   }
 
@@ -5932,7 +5953,7 @@
     const series = uniqueCatalogItems(items.filter(x => x.seriesId));
     const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
     const heading = type === "manga" ? "Mangás" : type === "comic" ? "Quadrinhos" : "Catálogo";
-    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
+    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid${type === "comic" && isSeries ? " catalog-series-grid" : ""}">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
     const publishers = new Map();
     items.filter(item => String(item.publisher || "").trim()).forEach(item => {
       const publisher = String(item.publisher).trim();
@@ -5948,7 +5969,7 @@
     const items = type ? state.db.library.filter(x => x.type === type) : state.db.library;
     const series = uniqueCatalogItems(items.filter(x => x.seriesId));
     const oneshots = uniqueCatalogItems(items.filter(x => !x.seriesId));
-    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
+    const group = (title, groupItems, isSeries = false) => groupItems.length ? `<section class="section"><div class="section-head"><div><h2 class="section-title">${title}</h2><div class="section-subtitle">${groupItems.length} obra(s)</div></div></div><div class="results-grid${type === "comic" && isSeries ? " catalog-series-grid" : ""}">${groupItems.map(item => isSeries ? seriesCard(item) : card(item)).join("")}</div></section>` : "";
     const publishers = new Map();
     items.filter(item => String(item.publisher || "").trim()).forEach(item => { const name = String(item.publisher).trim(); if (!publishers.has(name)) publishers.set(name, []); publishers.get(name).push(item); });
     const publisherEntries = [...publishers.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR"));
