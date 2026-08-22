@@ -1302,9 +1302,12 @@
     overlay.innerHTML = `<div class="modal series-cover-choice-modal"><div class="section-head"><div><h2>Escolher capa da série</h2><div class="section-subtitle">Escolha uma capa entre as edições desta série.</div></div><button class="small-btn" data-close>Fechar</button></div>${seriesModalEffects}<form id="series-cover-choice-form"><div class="cover-choice-options">${options.map(option => `<label class="cover-choice-option"><input type="radio" name="seriesCoverKey" value="${escapeHTML(option.key)}" ${current?.item_id === option.itemId && Boolean(current?.is_variant) === option.isVariant && (option.isVariant ? current?.variant_key === option.variantKey : true) || (!current && option.key === `standard:${editions[0].id}`) || (current?.is_variant && !["premium", "moderator", "admin"].includes(state.profile?.plan) && option.key === `standard:${editions[0].id}`) ? "checked" : ""}><img src="${escapeHTML(proxiedImageUrl(option.coverUrl))}" alt=""><span>${escapeHTML(option.label)}</span></label>`).join("")}</div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar capa</button></div></form></div>`;
     $("#modal-root").appendChild(overlay);
     $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
-    $$('[data-cover-effect-item]', overlay).forEach(button => button.onclick = event => {
+    $$('[data-cover-effect-item]', overlay).forEach(button => {
+      button.addEventListener("mousedown", event => event.preventDefault());
+      button.onclick = event => {
       event.stopPropagation();
       cycleCoverStyle(button.dataset.coverEffectItem, button.dataset.coverEffectCollection || "");
+      };
     });
     $("#series-cover-choice-form", overlay).onsubmit = async event => {
       event.preventDefault();
@@ -3972,9 +3975,9 @@
     const mostClicked = uniqueCatalogItems([...lib].sort((a,b) => (b.clicks||0) - (a.clicks||0)).slice(0, 8));
     const heroTitle = heroItem ? itemDisplayTitle(heroItem) : "Sua banca digital";
     const heroMeta = heroItem ? [heroItem.issue, heroItem.type ? formatType(heroItem.type) : "", heroItem.year].map(value => String(value || "").trim()).filter(Boolean).join(" · ") : "";
-    let randoms = state.homeRandomIds.map(id => lib.find(item => item.id === id)).filter(Boolean);
-    if (!randoms.length) {
-      randoms = uniqueCatalogItems([...lib].sort(() => Math.random() - .5).slice(0, 8));
+    let randoms = state.homeRandomIds.map(id => lib.find(item => item.id === id)).filter(Boolean).slice(0, 6);
+    if (randoms.length < 6) {
+      randoms = uniqueCatalogItems([...lib].sort(() => Math.random() - .5).slice(0, 6));
       state.homeRandomIds = randoms.map(item => item.id);
     }
 
@@ -4956,6 +4959,7 @@
     $$('[data-cover-effect-item]').forEach(el => {
       if (el.dataset.coverEffectBound) return;
       el.dataset.coverEffectBound = "true";
+      el.addEventListener("mousedown", event => event.preventDefault());
       el.addEventListener("click", event => {
         event.stopPropagation();
         cycleCoverStyle(el.dataset.coverEffectItem, el.dataset.coverEffectCollection || "");
