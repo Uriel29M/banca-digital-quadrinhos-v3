@@ -222,6 +222,8 @@
     favoriteIds: new Set(),
     coverVariants: new Map(),
     coverChoices: new Map(),
+    coverStyles: new Map(),
+    seriesCoverChoices: new Map(),
     readingProgress: new Map(),
     shelfSnapshot: null,
     shelfExpanded: { saved: false, read: false },
@@ -920,6 +922,24 @@
     state.coverChoices = result.error ? new Map() : new Map((result.data || []).map(choice => [choice.item_id, choice]));
   }
 
+  async function loadCoverStyles(userId) {
+    if (!userId) {
+      state.coverStyles = new Map();
+      return;
+    }
+    const result = await sb.from("user_cover_styles").select("item_id, style").eq("user_id", userId);
+    state.coverStyles = result.error ? new Map() : new Map((result.data || []).map(choice => [choice.item_id, choice.style]));
+  }
+
+  async function loadSeriesCoverChoices(userId) {
+    if (!userId) {
+      state.seriesCoverChoices = new Map();
+      return;
+    }
+    const result = await sb.from("user_series_cover_choices").select("series_id, item_id, cover_url, variant_key, is_variant").eq("user_id", userId);
+    state.seriesCoverChoices = result.error ? new Map() : new Map((result.data || []).map(choice => [choice.series_id, choice]));
+  }
+
   async function loadAccount() {
     if (!sb) {
       state.authReady = true;
@@ -930,6 +950,8 @@
     state.session = session;
     await loadCoverCatalog();
     await loadCoverChoices(session?.user?.id);
+    await loadCoverStyles(session?.user?.id);
+    await loadSeriesCoverChoices(session?.user?.id);
     const publisherSettings = await sb.from("publisher_settings").select("publisher_key, publisher_name, cover_url, is_pinned");
     state.publisherSettings = new Map((publisherSettings.data || []).map(setting => [setting.publisher_key, setting]));
     const publicCollectionsResult = await sb.from("shelf_collections").select("id, owner_id, name, cover_url, item_ids, blog_ids, collection_type, is_featured").eq("is_public", true).limit(50);
@@ -945,7 +967,7 @@
     }, new Map());
     state.popularPublicCollections = publicCollections
       .map(collection => ({ ...collection, username: collectionOwners.get(collection.owner_id) || "", likes: collectionLikeCounts.get(`${collection.owner_id}:${collection.id}`) || 0 }))
-      .filter(collection => collection.username)
+      .filter(collection => collection.collection_type !== "blog" && collection.username)
       .sort((a, b) => b.likes - a.likes || String(a.name).localeCompare(String(b.name), "pt-BR"))
       .slice(0, 8);
     const publicCollectionView = publicCollections.map(collection => ({ ...collection, username: collectionOwners.get(collection.owner_id) || "" })).filter(collection => collection.username);
@@ -1093,6 +1115,10 @@
       ? await sb.from("user_cover_choices").select("item_id, variant_key, label, cover_url").eq("user_id", profile.data.id)
       : { data: [] };
     const publicCoverChoices = new Map((publicCoverChoicesResult.data || []).map(choice => [choice.item_id, choice]));
+    const publicCoverStylesResult = await sb.from("user_cover_styles").select("item_id, style").eq("user_id", profile.data.id);
+    const publicCoverStyles = new Map((publicCoverStylesResult.data || []).map(choice => [choice.item_id, choice.style]));
+    const publicSeriesCoverChoicesResult = await sb.from("user_series_cover_choices").select("series_id, item_id, cover_url, variant_key, is_variant").eq("user_id", profile.data.id);
+    const publicSeriesCoverChoices = new Map((publicSeriesCoverChoicesResult.data || []).map(choice => [choice.series_id, choice]));
     state.publicProfile = {
       profile: profile.data,
       collectionId,
@@ -1108,6 +1134,8 @@
       collectionLikes,
       collectionLikeCounts,
       coverChoices: publicCoverChoices
+      ,coverStyles: publicCoverStyles
+      ,seriesCoverChoices: publicSeriesCoverChoices
       ,moderationHistory: (moderationHistory.data || []).map(entry => ({ ...entry, actor_username: actorNames.get(entry.actor_id) || "moderador" }))
       ,isFollowing
       ,followerCount: (followers.data || []).length
@@ -1236,6 +1264,61 @@
     };
   }
 
+  function openSeriesCoverChoice(seriesId) {
+    const existingOverlay = $("#modal-root .series-cover-choice-modal")?.closest(".modal-backdrop");
+    if (existingOverlay) return;
+    if (!state.session) return openAuthPage();
+    const editions = seriesEditions({ seriesId });
+    if (!editions.length) return;
+    const current = state.seriesCoverChoices.get(seriesId);
+    const options = [{ key: "__default", itemId: editions[0].id, coverUrl: editions[0].coverUrl || "", label: "Capa padrão da série", isVariant: false }];
+    editions.forEach(edition => {
+      if (edition.coverUrl) options.push({ key: `standard:${edition.id}`, itemId: edition.id, coverUrl: edition.coverUrl, label: `${itemDisplayTitle(edition)} · Capa padrão`, isVariant: false });
+      if (["premium", "moderator", "admin"].includes(state.profile?.plan)) usableCoverVariants(edition).forEach(variant => options.push({ key: `variant:${edition.id}:${variant.variant_key}`, itemId: edition.id, coverUrl: variant.cover_url, label: `${itemDisplayTitle(edition)} · ${variant.label}`, variantKey: variant.variant_key, isVariant: true }));
+    });
+    const seriesStyle = coverStyleFor({ id: seriesId });
+    const seriesModalEffects = `<div class="series-cover-modal-effects"><span>Estilo da capa:</span><button type="button" class="cover-effect-dot cover-effect-grayscale ${seriesStyle === "grayscale" ? "is-active" : ""}" data-cover-effect-item="${escapeHTML(seriesId)}" data-cover-effect="grayscale" title="${seriesStyle === "grayscale" ? "Voltar à capa normal" : "Capa em preto e branco"}" aria-label="${seriesStyle === "grayscale" ? "Voltar à capa normal" : "Capa em preto e branco"}"></button>${["premium", "moderator", "admin"].includes(state.profile?.plan) ? `<button type="button" class="cover-effect-dot cover-effect-gold ${seriesStyle === "gold" ? "is-active" : ""}" data-cover-effect-item="${escapeHTML(seriesId)}" data-cover-effect="gold" title="${seriesStyle === "gold" ? "Voltar à capa normal" : "Capa dourada"}" aria-label="${seriesStyle === "gold" ? "Voltar à capa normal" : "Capa dourada"}"></button>` : ""}</div>`;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-backdrop";
+    overlay.innerHTML = `<div class="modal series-cover-choice-modal"><div class="section-head"><div><h2>Escolher capa da série</h2><div class="section-subtitle">Escolha uma capa entre as edições desta série.</div></div><button class="small-btn" data-close>Fechar</button></div>${seriesModalEffects}<form id="series-cover-choice-form"><div class="cover-choice-options">${options.map(option => `<label class="cover-choice-option"><input type="radio" name="seriesCoverKey" value="${escapeHTML(option.key)}" ${current?.item_id === option.itemId && Boolean(current?.is_variant) === option.isVariant && (option.isVariant ? current?.variant_key === option.variantKey : true) || (!current && option.key === "__default") || (current?.is_variant && !["premium", "moderator", "admin"].includes(state.profile?.plan) && option.key === "__default") ? "checked" : ""}><img src="${escapeHTML(proxiedImageUrl(option.coverUrl))}" alt=""><span>${escapeHTML(option.label)}</span></label>`).join("")}</div><div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar capa</button></div></form></div>`;
+    $("#modal-root").appendChild(overlay);
+    $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    $$('[data-cover-effect-item]', overlay).forEach(button => button.onclick = event => {
+      event.stopPropagation();
+      const currentStyle = coverStyleFor({ id: button.dataset.coverEffectItem });
+      setCoverStyle(button.dataset.coverEffectItem, currentStyle === button.dataset.coverEffect ? "normal" : button.dataset.coverEffect);
+    });
+    $("#series-cover-choice-form", overlay).onsubmit = async event => {
+      event.preventDefault();
+      const selected = options.find(option => option.key === String(new FormData(event.currentTarget).get("seriesCoverKey")));
+      if (!selected) return;
+      const result = selected.key === "__default"
+        ? await sb.from("user_series_cover_choices").delete().eq("user_id", state.session.user.id).eq("series_id", seriesId)
+        : await sb.from("user_series_cover_choices").upsert({ user_id: state.session.user.id, series_id: seriesId, item_id: selected.itemId, cover_url: selected.coverUrl, variant_key: selected.variantKey || null, is_variant: selected.isVariant, updated_at: new Date().toISOString() }, { onConflict: "user_id,series_id" });
+      if (result.error) return toast(result.error.message);
+      if (selected.key === "__default") state.seriesCoverChoices.delete(seriesId);
+      else state.seriesCoverChoices.set(seriesId, { series_id: seriesId, item_id: selected.itemId, cover_url: selected.coverUrl, variant_key: selected.variantKey || null, is_variant: selected.isVariant });
+      overlay.remove();
+      updateSeriesCoverImages(seriesId);
+      toast("Capa da série atualizada.");
+    };
+  }
+
+  async function setCoverStyle(itemId, style) {
+    if (!state.session) return openAuthPage();
+    if (style === "gold" && !["premium", "moderator", "admin"].includes(state.profile?.plan)) return toast("A capa dourada é exclusiva para usuários Premium, moderadores e administradores.");
+    const item = state.db.library.find(entry => entry.id === itemId) || state.db.library.find(entry => entry.seriesId === itemId);
+    if (!item) return;
+    const nextStyle = ["normal", "grayscale", "gold"].includes(style) ? style : "normal";
+    const result = nextStyle === "normal"
+      ? await sb.from("user_cover_styles").delete().eq("user_id", state.session.user.id).eq("item_id", itemId)
+      : await sb.from("user_cover_styles").upsert({ user_id: state.session.user.id, item_id: itemId, style: nextStyle, updated_at: new Date().toISOString() }, { onConflict: "user_id,item_id" });
+    if (result.error) return toast(result.error.message);
+    if (nextStyle === "normal") state.coverStyles.delete(itemId);
+    else state.coverStyles.set(itemId, nextStyle);
+    updateCoverStyleImages(itemId);
+  }
+
   function updateCoverChoiceImages(itemId) {
     const item = state.db.library.find(entry => entry.id === itemId);
     if (!item) return;
@@ -1244,6 +1327,22 @@
       element.dataset.coverReady = "true";
       element.style.backgroundImage = `url("${cover}")`;
     });
+  }
+
+  function updateCoverStyleImages(itemId) {
+    const style = coverStyleFor({ id: itemId });
+    $$('[data-cover-id]').filter(element => element.dataset.coverId === itemId).forEach(element => { element.dataset.coverStyle = style; });
+    $$('[data-cover-style-item]').filter(element => element.dataset.coverStyleItem === itemId).forEach(element => { element.dataset.coverStyle = style; });
+    $$('[data-cover-effect-item]').filter(element => element.dataset.coverEffectItem === itemId).forEach(element => {
+      element.classList.toggle("is-active", element.dataset.coverEffect === style);
+    });
+  }
+
+  function updateSeriesCoverImages(seriesId) {
+    const item = state.db.library.find(entry => entry.seriesId === seriesId);
+    if (!item) return;
+    const cover = seriesCoverFor(item);
+    $$('[data-series-cover-id]').filter(element => element.dataset.seriesCoverId === seriesId).forEach(element => { element.style.backgroundImage = `url("${cover}")`; });
   }
 
   function updateFavoriteButtons(itemId) {
@@ -3502,6 +3601,18 @@
     return instantCover(item);
   }
 
+  function coverStyleFor(item, coverStyles = null) {
+    const activeStyles = coverStyles || (state.section === "public-profile" ? state.publicProfile?.coverStyles : state.coverStyles);
+    return activeStyles?.get?.(item?.id) || "normal";
+  }
+
+  function seriesCoverFor(item, seriesCoverChoices = null) {
+    const activeChoices = seriesCoverChoices || (state.section === "public-profile" ? state.publicProfile?.seriesCoverChoices : state.seriesCoverChoices);
+    const selectedCover = activeChoices?.get?.(item?.seriesId)?.cover_url;
+    if (selectedCover) return proxiedImageUrl(selectedCover);
+    return coverFor(item);
+  }
+
   function coverCacheKey(item, maxWidth) {
     return `banca-cover:v3:${maxWidth}:${item.id}:${item.fileUrl || item.telegramUrl || ""}`;
   }
@@ -3730,11 +3841,15 @@
     const hasCoverVariants = coverVariants.length > 0;
     const savedForCover = favoriteIds.has(item.id) || (seriesContext && item.seriesId && favoriteIds.has(item.seriesId));
     const canChooseCover = state.session && ["premium", "moderator", "admin"].includes(state.profile?.plan) && favoriteIds === state.favoriteIds && savedForCover && hasCoverVariants;
+    const coverStyle = coverStyleFor(item);
+    const canSetCoverStyle = Boolean(state.session) && favoriteIds === state.favoriteIds;
+    const canSetGoldStyle = canSetCoverStyle && ["premium", "moderator", "admin"].includes(state.profile?.plan);
+    const coverEffects = canSetCoverStyle ? `<span class="cover-effect-controls" aria-label="Efeito da capa"><button type="button" class="cover-effect-dot cover-effect-grayscale ${coverStyle === "grayscale" ? "is-active" : ""}" data-cover-effect-item="${escapeHTML(item.id)}" data-cover-effect="grayscale" title="${coverStyle === "grayscale" ? "Voltar à capa normal" : "Capa em preto e branco"}" aria-label="${coverStyle === "grayscale" ? "Voltar à capa normal" : "Capa em preto e branco"}"></button>${canSetGoldStyle ? `<button type="button" class="cover-effect-dot cover-effect-gold ${coverStyle === "gold" ? "is-active" : ""}" data-cover-effect-item="${escapeHTML(item.id)}" data-cover-effect="gold" title="${coverStyle === "gold" ? "Voltar à capa normal" : "Capa dourada"}" aria-label="${coverStyle === "gold" ? "Voltar à capa normal" : "Capa dourada"}"></button>` : ""}</span>` : "";
     const authors = String(item.author || "").split(/\s*(?:\/|&|\be\b)\s*/i).map(value => value.trim()).filter(Boolean);
     const entityButton = (kind, value, label = value) => value ? `<button type="button" class="card-entity-link" data-entity-kind="${escapeHTML(kind)}" data-entity-value="${escapeHTML(value)}">${escapeHTML(label)}</button>` : "";
     return `
       <article class="card" data-open="${escapeHTML(item.id)}" ${(directOpen || (state.section === "public-profile" && state.publicProfile?.collectionId)) ? "data-open-direct=\"true\"" : ""}>
-        <div class="cover" data-cover-id="${escapeHTML(item.id)}" style="background-image:url('${escapeHTML(coverFor(item, "card", coverChoices))}')">
+        <div class="cover" data-cover-id="${escapeHTML(item.id)}" data-cover-style="${escapeHTML(coverStyle)}" style="background-image:url('${escapeHTML(coverFor(item, "card", coverChoices))}')">
           <span class="cover-number">${escapeHTML(issueLabel)}</span>
           <button class="card-favorite ${favoriteIds.has(item.id) ? 'is-favorite' : ''}" data-favorite="${escapeHTML(item.id)}" title="Salvar na estante">★</button>
         </div>
@@ -3743,7 +3858,7 @@
           <div class="card-title">${escapeHTML(displayTitle)}</div>
           <div class="card-meta">${entityButton("year", String(item.year || ""), String(item.year || ""))}${entityButton("character", item.character)}${entityButton("publisher", item.publisher)}${entityButton("imprint", item.imprint)}</div>
           ${authors.length ? `<div class="card-authors">${authors.map(author => entityButton("author", author)).join(" ")}</div>` : ""}
-          <div class="card-stats"><span>♥ ${Number(item.clicks || 0).toLocaleString("pt-BR")} leituras</span>${canChooseCover ? `<button type="button" class="card-cover-choice" data-cover-choice="${escapeHTML(item.id)}" title="Escolher capa variante">Escolher capa</button>` : hasCoverVariants ? `<span class="card-variant-info" title="Esta edição possui capas variantes">Capa variante</span>` : ""}</div>
+          <div class="card-stats"><span>♥ ${Number(item.clicks || 0).toLocaleString("pt-BR")} leituras</span>${canChooseCover ? `<button type="button" class="card-cover-choice" data-cover-choice="${escapeHTML(item.id)}" title="Capa variante">Capa</button>` : hasCoverVariants ? `<span class="card-variant-info" title="Esta edição possui capas variantes">Capa variante</span>` : ""}${coverEffects}</div>
           <div class="card-actions"><button class="card-like ${state.comicLikeIds.has(item.id) ? "is-liked" : ""}" data-like-item="${escapeHTML(item.id)}" title="Curtir quadrinho">${state.comicLikeIds.has(item.id) ? "♥" : "♡"} ${state.comicLikeCounts.get(item.id) || 0}</button><button class="card-share" data-share-item="${escapeHTML(item.id)}" title="Compartilhar quadrinho">Compartilhar</button><button class="card-comment" data-comment-item="${escapeHTML(item.id)}" title="Ver comentários">Comentários</button>${item.seriesId ? `<button class="card-series" data-view-series="${escapeHTML(item.seriesId)}" title="Ver série">Série</button>` : ""}</div>
         </div>
       </article>`;
@@ -3787,7 +3902,7 @@
           </div>
           ${actionText ? `<button class="link-btn" data-section="search">${escapeHTML(actionText)} →</button>` : ""}
         </div>
-        <div class="rail">${uniqueCatalogItems(items).map(item => card(item, state.readingProgress, state.favoriteIds, directOpen)).join("")}</div>
+        <div class="rail-viewport"><div class="rail">${uniqueCatalogItems(items).map(item => card(item, state.readingProgress, state.favoriteIds, directOpen)).join("")}</div></div>
       </section>`;
   }
 
@@ -3833,8 +3948,8 @@
     const featuredCollectionsRail = state.featuredComicCollections?.length ? `<section class="section featured-collections-rail"><div class="section-head"><div><h2 class="section-title">Coleções de quadrinhos em destaque</h2><div class="section-subtitle">Coleções públicas escolhidas pela equipe.</div></div></div><div class="public-collections-grid">${state.featuredComicCollections.map(collection => publicCollectionCard(collection)).join("")}</div></section>` : "";
     return `
       <section class="hero">
-        <div class="hero-bg" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-size="hero" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')"></div>
-        <div class="hero-cover" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-size="hero" data-open="${escapeHTML(heroItem?.id || "")}" data-open-direct="true" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')" aria-label="Abrir quadrinho em destaque"></div>
+        <div class="hero-bg" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-style="${escapeHTML(coverStyleFor(heroItem))}" data-cover-size="hero" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')"></div>
+        <div class="hero-cover" data-cover-id="${escapeHTML(heroItem?.id || "")}" data-cover-style="${escapeHTML(coverStyleFor(heroItem))}" data-cover-size="hero" data-open="${escapeHTML(heroItem?.id || "")}" data-open-direct="true" style="background-image:url('${escapeHTML(coverFor(heroItem, "hero"))}')" aria-label="Abrir quadrinho em destaque"></div>
         <div class="hero-content">
           <div class="eyebrow">Destaque da banca</div>
           <h1>${escapeHTML(heroTitle)}</h1>
@@ -3884,12 +3999,13 @@
       return String(item[filter.kind] || "").trim().toLowerCase() === normalizedValue && (filter.kind !== "publisher" || item.type === "comic");
     });
     const collectionFilter = state.collectionFilter || { field: "all", query: "" };
-    const items = filter.kind === "publisher" ? uniqueCatalogItems(filterCollectionItems(allItems, collectionFilter.field, collectionFilter.query)) : allItems;
+    const items = uniqueCatalogItems(filterCollectionItems(allItems, collectionFilter.field, collectionFilter.query));
     const labels = { publisher: "Editora", character: "Personagem", imprint: "Selo", author: "Autor", year: "Ano", publication: "Publicação", status: "Status" };
     const title = labels[filter.kind] || "Catálogo";
     const wikiSearch = `https://pt.wikipedia.org/wiki/Especial:Pesquisar?search=${encodeURIComponent(filter.value || "")}`;
     const wikiText = filter.kind === "year" ? `Todos os quadrinhos publicados em ${filter.value}.` : `${filter.value} aparece em ${items.length} edição(ões) do catálogo da Banca Digital.`;
-    const wikiMarkup = filter.kind === "year" ? "" : `<section class="entity-wiki"><div class="eyebrow">Wiki rápida</div><p>${escapeHTML(wikiText)}</p><a class="small-btn" href="${escapeHTML(wikiSearch)}" target="_blank" rel="noopener">Pesquisar na Wikipédia</a></section>`;
+    const hideWiki = ["Série Mensal", "Recentes", "Vários autores"].some(value => value.toLowerCase() === String(filter.value || "").trim().toLowerCase());
+    const wikiMarkup = filter.kind === "year" || hideWiki ? "" : `<section class="entity-wiki"><div class="eyebrow">Wiki rápida</div><p>${escapeHTML(wikiText)}</p><a class="small-btn" href="${escapeHTML(wikiSearch)}" target="_blank" rel="noopener">Pesquisar na Wikipédia</a></section>`;
     if (filter.kind !== "publisher") return `<div class="content"><div class="section-head"><div><div class="eyebrow">Explorar catálogo · ${escapeHTML(title)}</div><h1 class="section-title">${escapeHTML(filter.value)}</h1><div class="section-subtitle">${items.length} edição(ões)</div></div><button class="small-btn" data-section="home">Voltar ao início</button></div>${wikiMarkup}<section class="section"><div class="results-grid">${uniqueCatalogItems(items).map(item => card(item)).join("") || `<div class="empty">Nenhuma edição encontrada.</div>`}</div></section></div>`;
     const setting = state.publisherSettings.get(publisherKey(filter.value));
     const canManage = ["moderator", "admin"].includes(state.profile?.plan);
@@ -4749,14 +4865,15 @@
       }
       $(".public-profile-page").classList.toggle("shelf-show-blogs", state.publicShelfTab === "blogs");
     }
-    if (state.section === "entity" && state.entityFilter?.kind === "publisher" && !$("[data-publisher-filter-form]")) {
+    if (state.section === "entity" && !$("[data-entity-filter-form]")) {
       const filter = state.collectionFilter || { field: "all", query: "" };
       const form = document.createElement("form");
       form.className = "collection-filter publisher-filter";
       form.dataset.collectionFilterForm = "true";
-      form.dataset.publisherFilterForm = "true";
-      form.innerHTML = `<select name="field"><option value="all" ${filter.field === "all" ? "selected" : ""}>Filtrar por qualquer campo</option><option value="author" ${filter.field === "author" ? "selected" : ""}>Autor</option><option value="publisher" ${filter.field === "publisher" ? "selected" : ""}>Editora</option><option value="character" ${filter.field === "character" ? "selected" : ""}>Personagem</option><option value="tag" ${filter.field === "tag" ? "selected" : ""}>Gênero / tag</option><option value="seriesTitle" ${filter.field === "seriesTitle" ? "selected" : ""}>Série</option><option value="title" ${filter.field === "title" ? "selected" : ""}>Título</option></select><input name="query" value="${escapeHTML(filter.query)}" placeholder="Digite para filtrar a editora"><button class="small-btn">Filtrar</button>`;
-      $(".publisher-page .section-head")?.after(form);
+      form.dataset.entityFilterForm = "true";
+      form.innerHTML = `<select name="field"><option value="all" ${filter.field === "all" ? "selected" : ""}>Filtrar por qualquer campo</option><option value="author" ${filter.field === "author" ? "selected" : ""}>Autor</option><option value="publisher" ${filter.field === "publisher" ? "selected" : ""}>Editora</option><option value="imprint" ${filter.field === "imprint" ? "selected" : ""}>Selo</option><option value="character" ${filter.field === "character" ? "selected" : ""}>Personagem</option><option value="tag" ${filter.field === "tag" ? "selected" : ""}>Gênero / tag</option><option value="seriesTitle" ${filter.field === "seriesTitle" ? "selected" : ""}>Série</option><option value="title" ${filter.field === "title" ? "selected" : ""}>Título</option></select><input name="query" value="${escapeHTML(filter.query)}" placeholder="Digite para filtrar esta página"><button class="small-btn">Filtrar</button>`;
+      const heading = state.entityFilter?.kind === "publisher" ? $(".publisher-page .section-head") : $(".content > .section-head");
+      heading?.after(form);
     }
     const canManage = state.profile?.plan === "admin";
     const isAdmin = state.profile?.plan === "admin";
@@ -4779,6 +4896,20 @@
       if (el.dataset.coverChoiceBound) return;
       el.dataset.coverChoiceBound = "true";
       el.addEventListener("click", event => { event.stopPropagation(); openCoverChoice(el.dataset.coverChoice); });
+    });
+    $$('[data-cover-effect-item]').forEach(el => {
+      if (el.dataset.coverEffectBound) return;
+      el.dataset.coverEffectBound = "true";
+      el.addEventListener("click", event => {
+        event.stopPropagation();
+        const currentStyle = coverStyleFor({ id: el.dataset.coverEffectItem });
+        setCoverStyle(el.dataset.coverEffectItem, currentStyle === el.dataset.coverEffect ? "normal" : el.dataset.coverEffect);
+      });
+    });
+    $$('[data-series-cover-choice]').forEach(el => {
+      if (el.dataset.seriesCoverChoiceBound) return;
+      el.dataset.seriesCoverChoiceBound = "true";
+      el.addEventListener("click", event => { event.stopPropagation(); openSeriesCoverChoice(el.dataset.seriesCoverChoice); });
     });
     $$('[data-read-item]').forEach(el => el.addEventListener("click", event => {
       event.stopPropagation();
@@ -5572,8 +5703,21 @@
     const editions = seriesEditions(item);
     const count = editions.length || series.editions || "—";
     const entityButton = (kind, value) => value ? `<button type="button" class="series-entity-link" data-entity-kind="${escapeHTML(kind)}" data-entity-value="${escapeHTML(value)}">${escapeHTML(value)}</button>` : "";
+    const seriesCoverStyle = coverStyleFor({ id: item.seriesId });
     const saved = favoriteIds.has(item.seriesId);
-    return `<article class="series-card" data-open-series="${escapeHTML(item.seriesId)}" tabindex="0"><div class="series-card-cover" style="background-image:url('${escapeHTML(coverFor(series))}')"></div><div class="series-card-body"><div class="eyebrow">Série</div><h3>${escapeHTML(series.name || series.seriesTitle)}</h3><p class="series-card-description">${escapeHTML(series.description || "")}</p><div class="series-card-meta">${entityButton("publisher", series.publisher)}${entityButton("publication", series.publication)}${entityButton("status", series.status)}</div><div class="series-card-footer"><span>${escapeHTML(String(count))} edições</span><button type="button" class="series-save-button ${saved ? "is-saved" : ""}" data-series-favorite="${escapeHTML(item.seriesId)}">${saved ? "★ Salva" : "☆ Salvar"}</button></div></div></article>`;
+    const canSetSeriesCover = Boolean(state.session) && favoriteIds === state.favoriteIds;
+    const canSetSeriesGold = canSetSeriesCover && ["premium", "moderator", "admin"].includes(state.profile?.plan);
+    const seriesCoverEffects = canSetSeriesCover ? `<span class="cover-effect-controls" aria-label="Efeito da capa da série"><button type="button" class="cover-effect-dot cover-effect-grayscale ${seriesCoverStyle === "grayscale" ? "is-active" : ""}" data-cover-effect-item="${escapeHTML(item.seriesId)}" data-cover-effect="grayscale" title="${seriesCoverStyle === "grayscale" ? "Voltar à capa normal" : "Capa em preto e branco"}" aria-label="${seriesCoverStyle === "grayscale" ? "Voltar à capa normal" : "Capa em preto e branco"}"></button>${canSetSeriesGold ? `<button type="button" class="cover-effect-dot cover-effect-gold ${seriesCoverStyle === "gold" ? "is-active" : ""}" data-cover-effect-item="${escapeHTML(item.seriesId)}" data-cover-effect="gold" title="${seriesCoverStyle === "gold" ? "Voltar à capa normal" : "Capa dourada"}" aria-label="${seriesCoverStyle === "gold" ? "Voltar à capa normal" : "Capa dourada"}"></button>` : ""}</span>` : "";
+    const seriesCoverChoiceButton = canSetSeriesCover ? `<button type="button" class="series-cover-choice" data-series-cover-choice="${escapeHTML(item.seriesId)}" title="Capa da série">Capa</button>` : "";
+    const seriesName = series.name || series.seriesTitle;
+    const startYearValue = series.year ? String(series.year) : "";
+    const startYear = startYearValue ? `<button type="button" class="series-card-year series-entity-link" data-entity-kind="year" data-entity-value="${escapeHTML(startYearValue)}">(${escapeHTML(startYearValue)})</button>` : "";
+    const description = String(series.description || "");
+    const descriptionTitle = description ? ` title="${escapeHTML(description)}"` : "";
+    const mainCover = seriesCoverFor(item);
+    const stackCovers = [editions[1], editions[2]].map(edition => edition ? seriesCoverFor(edition) : mainCover);
+    const stackMarkup = stackCovers.map((cover, index) => `<div class="series-card-stack-cover series-card-stack-cover-${index + 1}" style="background-image:url('${escapeHTML(cover)}')"></div>`).join("");
+    return `<article class="series-card" data-open-series="${escapeHTML(item.seriesId)}" tabindex="0"><div class="series-card-cover" data-series-cover-id="${escapeHTML(item.seriesId)}" data-cover-style-item="${escapeHTML(item.seriesId)}" data-cover-style="${escapeHTML(seriesCoverStyle)}" style="background-image:url('${escapeHTML(seriesCoverFor(item))}')"></div><div class="series-card-body"><div class="eyebrow">Série</div><h3>${escapeHTML(seriesName)} ${startYear}</h3><p class="series-card-description"${descriptionTitle}>${escapeHTML(description)}</p><div class="series-card-meta">${entityButton("publisher", series.publisher)}${entityButton("publication", series.publication)}${entityButton("status", series.status)}</div><div class="series-card-footer"><span class="series-card-count">${escapeHTML(String(count))} edições</span><div class="series-card-footer-actions">${seriesCoverChoiceButton}${seriesCoverEffects}<button type="button" class="series-save-button ${saved ? "is-saved" : ""}" data-series-favorite="${escapeHTML(item.seriesId)}">${saved ? "★ Salva" : "☆ Salvar"}</button></div></div></div></article>`;
   }
 
   window.addEventListener("popstate", applyRoute);

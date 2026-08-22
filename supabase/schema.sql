@@ -251,7 +251,7 @@ create table if not exists public.comic_cover_variants (
 
 alter table public.comic_cover_variants drop constraint if exists comic_cover_variants_cover_url_check;
 alter table public.comic_cover_variants add constraint comic_cover_variants_cover_url_check check (
-  cover_url ~ '^https://(www[.]|media[.])?(static[.]dc[.]com|files[12][.]comics[.]org|storage[.]googleapis[.]com|dcuguide[.]com|thepopverse[.]com|comicstoastonish[.]com|static[.]pulps[.]fr|sanctumsanctorumcomics[.]com|goldenapplecomics[.]com|blackdragoncomix[.]com|midtowncomics[.]com|everythingcomics[.]ca|thecomicmint[.]com|mlpnk72yciwc[.]i[.]optimole[.]com|media[.]forbiddenplanet[.]com|image[.]keycollectorcomics[.]com|comics[.]forbiddenplanet[.]co[.]uk)/'
+  cover_url ~ '^https://'
 );
 
 create table if not exists public.user_cover_choices (
@@ -265,9 +265,30 @@ create table if not exists public.user_cover_choices (
 );
 alter table public.user_cover_choices drop constraint if exists user_cover_choices_cover_url_check;
 alter table public.user_cover_choices add constraint user_cover_choices_cover_url_check check (
-  cover_url ~ '^https://(www[.]|media[.])?(static[.]dc[.]com|files[12][.]comics[.]org|storage[.]googleapis[.]com|dcuguide[.]com|thepopverse[.]com|comicstoastonish[.]com|static[.]pulps[.]fr|sanctumsanctorumcomics[.]com|goldenapplecomics[.]com|blackdragoncomix[.]com|midtowncomics[.]com|everythingcomics[.]ca|thecomicmint[.]com|mlpnk72yciwc[.]i[.]optimole[.]com|media[.]forbiddenplanet[.]com|image[.]keycollectorcomics[.]com|comics[.]forbiddenplanet[.]co[.]uk)/'
+  cover_url ~ '^https://'
 );
 create index if not exists user_cover_choices_item_idx on public.user_cover_choices(item_id);
+
+create table if not exists public.user_cover_styles (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  item_id text not null,
+  style text not null default 'normal' check (style in ('normal', 'grayscale', 'gold')),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, item_id)
+);
+create index if not exists user_cover_styles_item_idx on public.user_cover_styles(item_id);
+
+create table if not exists public.user_series_cover_choices (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  series_id text not null,
+  item_id text not null,
+  cover_url text not null check (cover_url ~ '^https://'),
+  variant_key text,
+  is_variant boolean not null default false,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, series_id)
+);
+create index if not exists user_series_cover_choices_series_idx on public.user_series_cover_choices(series_id);
 
 create or replace function public.validate_user_cover_choice()
 returns trigger language plpgsql security definer set search_path = public
@@ -603,6 +624,16 @@ create or replace function public.can_customize_covers()
 returns boolean language sql stable security definer set search_path = public
 as $$ select exists (select 1 from public.profiles where id = auth.uid() and plan in ('premium', 'moderator', 'admin')) $$;
 
+create or replace function public.can_apply_cover_style(p_style text)
+returns boolean language sql stable security definer set search_path = public
+as $$
+  select auth.uid() is not null
+    and (
+      p_style = 'grayscale'
+      or exists (select 1 from public.profiles where id = auth.uid() and plan in ('premium', 'moderator', 'admin'))
+    )
+$$;
+
 create policy "publisher covers are public" on storage.objects for select using (bucket_id = 'publisher-covers');
 create policy "moderators upload publisher covers" on storage.objects for insert with check (bucket_id = 'publisher-covers' and public.is_moderator() and auth.uid()::text = (storage.foldername(name))[1]);
 create policy "moderators update publisher covers" on storage.objects for update using (bucket_id = 'publisher-covers' and public.is_moderator() and auth.uid()::text = (storage.foldername(name))[1]);
@@ -640,6 +671,8 @@ alter table public.chat_rooms enable row level security;
 alter table public.favorites enable row level security;
 alter table public.comic_cover_variants enable row level security;
 alter table public.user_cover_choices enable row level security;
+alter table public.user_cover_styles enable row level security;
+alter table public.user_series_cover_choices enable row level security;
 alter table public.comic_likes enable row level security;
 alter table public.reading_progress enable row level security;
 alter table public.comic_read_counts enable row level security;
@@ -683,6 +716,10 @@ drop policy if exists "cover variants are public" on public.comic_cover_variants
 drop policy if exists "admins manage cover variants" on public.comic_cover_variants;
 drop policy if exists "cover choices are public" on public.user_cover_choices;
 drop policy if exists "premium users manage own cover choices" on public.user_cover_choices;
+drop policy if exists "cover styles are public" on public.user_cover_styles;
+drop policy if exists "premium users manage own cover styles" on public.user_cover_styles;
+drop policy if exists "series cover choices are public" on public.user_series_cover_choices;
+drop policy if exists "users manage own series cover choices" on public.user_series_cover_choices;
 drop policy if exists "comic likes are public" on public.comic_likes;
 drop policy if exists "users manage own comic likes" on public.comic_likes;
 drop policy if exists "reading progress is public" on public.reading_progress;
@@ -754,6 +791,10 @@ create policy "cover variants are public" on public.comic_cover_variants for sel
 create policy "admins manage cover variants" on public.comic_cover_variants for all using (public.is_admin()) with check (public.is_admin());
 create policy "cover choices are public" on public.user_cover_choices for select using (true);
 create policy "premium users manage own cover choices" on public.user_cover_choices for all using (auth.uid() = user_id and public.can_customize_covers()) with check (auth.uid() = user_id and public.can_customize_covers());
+create policy "cover styles are public" on public.user_cover_styles for select using (true);
+create policy "users manage own cover styles" on public.user_cover_styles for all using (auth.uid() = user_id) with check (auth.uid() = user_id and public.can_apply_cover_style(style));
+create policy "series cover choices are public" on public.user_series_cover_choices for select using (true);
+create policy "users manage own series cover choices" on public.user_series_cover_choices for all using (auth.uid() = user_id) with check (auth.uid() = user_id and (not is_variant or public.can_customize_covers()));
 create policy "comic likes are public" on public.comic_likes for select using (
   auth.uid() = user_id or exists (select 1 from public.profiles where id = user_id and likes_public)
 );
