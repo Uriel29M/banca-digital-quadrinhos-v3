@@ -1718,24 +1718,32 @@
 
   function appendSeriesNavigation(item, controls, overlay) {
     const editions = seriesEditions(item);
-    if (editions.length < 2 || controls.querySelector("[data-series-nav]")) return;
+    const previousHost = $("#reader-series-prev", overlay);
+    const nextHost = $("#reader-series-next", overlay);
+    if (editions.length < 2 || (!previousHost && !nextHost)) return;
     const current = editions.findIndex(x => x.id === item.id);
-    const nav = document.createElement("span");
-    nav.dataset.seriesNav = "true";
-    nav.className = "series-reader-nav";
-    nav.innerHTML = `
-      <button title="Primeira edição" data-series-target="0" ${current <= 0 ? "disabled" : ""}>«</button>
-      <button title="Edição anterior" data-series-target="${Math.max(0, current - 1)}" ${current <= 0 ? "disabled" : ""}>‹ Série</button>
-      <button title="Próxima edição" data-series-target="${Math.min(editions.length - 1, current + 1)}" ${current >= editions.length - 1 ? "disabled" : ""}>Série ›</button>
-      <button title="Última edição" data-series-target="${editions.length - 1}" ${current >= editions.length - 1 ? "disabled" : ""}>»</button>`;
-    controls.appendChild(nav);
-    $$('[data-series-target]', nav).forEach(button => button.addEventListener("click", () => {
+    const firstEdition = editions[0];
+    const previousEdition = editions[current - 1];
+    const nextEdition = editions[current + 1];
+    const lastEdition = editions[editions.length - 1];
+    const editionButtonLabel = edition => edition?.issue ? `#${escapeHTML(String(edition.issue))}` : "Edição";
+    const createNavigation = (host, html) => {
+      if (!host || host.querySelector("[data-series-nav]")) return;
+      const nav = document.createElement("span");
+      nav.dataset.seriesNav = "true";
+      nav.className = "series-reader-nav";
+      nav.innerHTML = html;
+      host.appendChild(nav);
+      $$('[data-series-target]', nav).forEach(button => button.addEventListener("click", () => {
       const target = editions[Number(button.dataset.seriesTarget)];
       if (!target || target.id === item.id) return;
       overlay._seriesObserver?.disconnect();
       overlay.remove();
       openReader(target);
-    }));
+      }));
+    };
+    if (current > 0) createNavigation(previousHost, `${current > 1 ? `<button title="Primeira edição${firstEdition?.issue ? ` — ${String(firstEdition.issue)}` : ""}" data-series-target="0">« ${editionButtonLabel(firstEdition)}</button>` : ""}<button title="Edição anterior${previousEdition?.issue ? ` — ${String(previousEdition.issue)}` : ""}" data-series-target="${current - 1}">‹ ${editionButtonLabel(previousEdition)}</button>`);
+    if (current < editions.length - 1) createNavigation(nextHost, `<button title="Próxima edição${nextEdition?.issue ? ` — ${String(nextEdition.issue)}` : ""}" data-series-target="${current + 1}">${editionButtonLabel(nextEdition)} ›</button>${current < editions.length - 2 ? `<button title="Última edição${lastEdition?.issue ? ` — ${String(lastEdition.issue)}` : ""}" data-series-target="${editions.length - 1}">${editionButtonLabel(lastEdition)} »</button>` : ""}`);
   }
 
   function openEntityPage(kind, value) {
@@ -2142,7 +2150,7 @@
         <button class="small-btn" data-close-reader>← Voltar</button>
         <div class="reader-title">${escapeHTML(itemDisplayTitle(item))}</div>
         ${showModeSelector ? `
-          <select class="small-btn" id="reading-mode-select">
+          <select class="small-btn" id="reading-mode-select" disabled>
             <option value="single-page" ${state.readingMode === 'single-page' ? 'selected' : ''}>Página por página</option>
             <option value="double-page" ${state.readingMode === 'double-page' ? 'selected' : ''}>
               Duas páginas
@@ -2164,7 +2172,11 @@
         <button class="small-btn" data-open-external>Abrir arquivo</button>
       </div>
       <div class="reader-body" id="reader-body"></div>
-      <div class="reader-controls" id="reader-controls"></div>
+      <div class="reader-bottom-controls">
+        <div class="reader-series-controls reader-series-prev" id="reader-series-prev"></div>
+        <div class="reader-controls" id="reader-controls"><span class="reader-page">Carregando…</span></div>
+        <div class="reader-series-controls reader-series-next" id="reader-series-next"></div>
+      </div>
     `;
     document.body.appendChild(overlay);
 
@@ -2251,6 +2263,7 @@
     const seriesObserver = new MutationObserver(() => appendSeriesNavigation(item, controls, overlay));
     overlay._seriesObserver = seriesObserver;
     seriesObserver.observe(controls, { childList: true });
+    appendSeriesNavigation(item, controls, overlay);
     $("[data-close-reader]", overlay).addEventListener("click", () => seriesObserver.disconnect(), { once: true });
 
     const directionButton = $("#reading-direction-btn", overlay);
@@ -2538,6 +2551,7 @@
 
       const modeSelect = $("#reading-mode-select", overlay);
       if (modeSelect) {
+        modeSelect.disabled = false;
         modeSelect.addEventListener('change', (e) => {
           setReadingMode(e.target.value);
           // Re-open the reader with the new mode
@@ -2822,6 +2836,7 @@
 
       const modeSelect = $("#reading-mode-select", overlay);
       if (modeSelect) {
+        modeSelect.disabled = false;
         modeSelect.addEventListener('change', (e) => {
           setReadingMode(e.target.value);
           overlay._cbzDownloadController?.abort();
@@ -3495,6 +3510,7 @@
 
       const modeSelect = $("#reading-mode-select", overlay);
       if (modeSelect) {
+        modeSelect.disabled = false;
         modeSelect.addEventListener('change', (e) => {
           setReadingMode(e.target.value);
           overlay.remove();
@@ -4060,7 +4076,7 @@
           <div class="eyebrow">Destaque da banca</div>
           <h1>${escapeHTML(heroTitle)}</h1>
           ${heroMeta ? `<div class="hero-meta">${escapeHTML(heroMeta)}</div>` : ""}
-          <p>${escapeHTML(heroItem?.description || "Publique e descubra quadrinhos sem precisar armazenar os arquivos no servidor.")}</p>
+          <p class="hero-description">${escapeHTML(heroItem?.description || "Publique e descubra quadrinhos sem precisar armazenar os arquivos no servidor.")}</p><button class="hero-more" type="button" data-hero-more>Ler mais</button>
           ${heroItem ? `<button class="btn btn-primary" data-open="${escapeHTML(heroItem.id)}" data-open-direct="true">▶ Ler agora</button>` : ""}
           <button class="btn btn-secondary" data-action="random">🎲 Surpreenda-me</button>
         </div>
@@ -4991,6 +5007,16 @@
 
   function bind() {
     syncActiveNav();
+    const heroDescription = $(".hero-description");
+    const heroMore = $("[data-hero-more]");
+    if (heroDescription && heroMore) {
+      if (heroDescription.scrollHeight > heroDescription.clientHeight + 1) heroMore.classList.add("is-visible");
+      heroMore.addEventListener("click", () => {
+        const expanded = heroDescription.classList.toggle("is-expanded");
+        heroDescription.closest(".hero")?.classList.toggle("is-expanded", expanded);
+        heroMore.textContent = expanded ? "Mostrar menos" : "Ler mais";
+      });
+    }
     $(".content")?.classList.toggle("shelf-page", state.section === "shelf");
     if (state.section === "ranking") {
       const rankingPage = $(".ranking-page");
@@ -5283,10 +5309,50 @@
     $("[data-collection-filter-form]")?.addEventListener("submit", event => { event.preventDefault(); const form = new FormData(event.currentTarget); state.collectionFilter = { field: String(form.get("field") || "all"), query: String(form.get("query") || "") }; render(); });
     $("[data-clear-collection-filter]")?.addEventListener("click", () => { state.collectionFilter = { field: "all", query: "" }; render(); });
     $$("[data-open]").forEach(el => el.addEventListener("click", () => {
+      $$(".card-wrap > .card-actions").forEach(actions => {
+        if ($("[data-card-about]", actions)) return;
+        const card = actions.parentElement?.querySelector(":scope > .card");
+        if (!card?.dataset.open) return;
+        const button = document.createElement("button");
+        button.className = "card-about";
+        button.dataset.cardAbout = card.dataset.open;
+        button.type = "button";
+        button.textContent = "Sobre";
+        button.title = "Mostrar informações";
+        actions.prepend(button);
+      });
+    $$('[data-card-about]').filter(button => !button.dataset.aboutBound).forEach(button => { button.dataset.aboutBound = "true"; button.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const card = button.closest(".card-wrap")?.querySelector(":scope > .card");
+        if (!card) return;
+        const open = card.classList.toggle("is-about-open");
+        button.textContent = open ? "Fechar" : "Sobre";
+      }); });
       const item = state.db.library.find(x => x.id === el.dataset.open);
       if (el.dataset.openDirect === "true") openReader(item);
       else openItem(item);
     }));
+    $$(".card-wrap > .card-actions").forEach(actions => {
+      if ($("[data-card-about]", actions)) return;
+      const card = actions.parentElement?.querySelector(":scope > .card");
+      if (!card?.dataset.open) return;
+      const button = document.createElement("button");
+      button.className = "card-about";
+      button.dataset.cardAbout = card.dataset.open;
+      button.type = "button";
+      button.textContent = "Sobre";
+      button.title = "Mostrar informações";
+      actions.prepend(button);
+    });
+    $$('[data-card-about]').filter(button => !button.dataset.aboutBound).forEach(button => { button.dataset.aboutBound = "true"; button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const card = button.closest(".card-wrap")?.querySelector(":scope > .card");
+      if (!card) return;
+      const open = card.classList.toggle("is-about-open");
+      button.textContent = open ? "Fechar" : "Sobre";
+    }); });
     $$("[data-section]").forEach(el => el.addEventListener("click", () => {
       const s = el.dataset.section;
       setSection(s === "comics" ? "comic" : s);
