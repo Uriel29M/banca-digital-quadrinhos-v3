@@ -263,6 +263,12 @@
     blogCommentCounts: new Map(),
     blogCommentThreads: new Map(),
     blogEditorRange: null
+    ,rankingPeriod: "week"
+    ,rankingMembers: []
+    ,rankingCategory: null
+    ,rankingSearch: ""
+    ,rankingLoading: false
+    ,presenceInterval: null
   };
 
   let activeReaderCleanup = null;
@@ -272,6 +278,7 @@
     home: "",
     comic: "quadrinhos",
     blog: "blogs",
+    ranking: "ranking",
     collections: "colecoes",
     search: "pesquisar",
     shelf: "estante",
@@ -323,11 +330,13 @@
     } else {
       state.section = section;
       state.collectionId = params.get("colecao") || null;
+      state.rankingCategory = section === "ranking" ? params.get("categoria") || null : null;
       if (section === "blog") state.blogOpenId = params.get("blog") || null;
       if (section === "search") state.search = params.get("q") || "";
       if (section === "entity") state.entityFilter = { kind: params.get("tipo") || "character", value: params.get("valor") || "" };
       render();
       if (section === "blog" && !state.blogPosts.length) loadBlogPosts();
+      if (section === "ranking" && state.authReady) loadRankingData();
     }
     handlingRoute = false;
   }
@@ -362,10 +371,37 @@
       return;
     }
     item.clicks = Number(result.data) || 0;
+    if (state.session?.user?.id) await sb.rpc("grant_profile_xp", { p_event_type: "read", p_event_key: `read:${item.id}` });
     $$('[data-open]').filter(element => element.dataset.open === item.id).forEach(cardElement => {
       const stats = $(".card-stats", cardElement);
       if (stats) stats.textContent = `♥ ${item.clicks.toLocaleString("pt-BR")} leituras`;
     });
+  }
+
+  async function startPresence() {
+    if (!sb || !state.session?.user?.id) return;
+    if (state.presenceInterval) clearInterval(state.presenceInterval);
+    const heartbeat = async () => {
+      const result = await sb.rpc("touch_profile");
+      if (!result.error && state.section === "ranking") loadRankingData(true);
+    };
+    await heartbeat();
+    state.presenceInterval = setInterval(heartbeat, 60000);
+  }
+
+  async function loadRankingData(silent = false) {
+    if (!sb || state.rankingLoading) return;
+    state.rankingLoading = true;
+    if (!silent) render();
+    const result = await sb.rpc("get_profile_ranking", { p_period: state.rankingPeriod, p_limit: 500 });
+    state.rankingMembers = result.error ? [] : (result.data || []);
+    state.rankingLoading = false;
+    if (state.section === "ranking") render();
+  }
+
+  async function awardProfileXp(eventType, eventKey) {
+    if (!sb || !state.session?.user?.id) return;
+    await sb.rpc("grant_profile_xp", { p_event_type: eventType, p_event_key: eventKey });
   }
 
   async function publishCatalog() {
@@ -1007,12 +1043,20 @@
       state.shelfSnapshot = { saved: new Set(state.favoriteIds), read: new Set([...state.readingProgress.entries()].filter(([, row]) => row.completed).map(([id]) => id)) };
       const achievements = await sb.from("user_achievements").select("achievements(name, description, icon)").eq("user_id", session.user.id);
       state.achievements = (achievements.data || []).map(row => row.achievements).filter(Boolean);
+      const checkin = await sb.rpc("daily_profile_checkin");
+      if (!checkin.error && checkin.data?.[0]) {
+        const result = checkin.data[0];
+        state.profile = { ...state.profile, xp: result.total_xp, level: result.current_level, daily_streak: result.streak };
+        if (result.awarded_xp > 0) toast(`Check-in diário: +${result.awarded_xp} XP · sequência de ${result.streak} dia(s).`);
+      }
       await sb.rpc("touch_profile");
+      await startPresence();
     }
     await loadNotifications();
     state.authReady = true;
     syncTopAvatar();
     render();
+    if (state.section === "ranking") loadRankingData();
   }
 
   async function loadNotifications() {
@@ -1079,9 +1123,9 @@
       render();
       return;
     }
-    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, shelf_saved_public, shelf_series_public, shelf_read_public, shelf_completed_public, shelf_liked_public, shelf_blogs_public, profile_hidden, is_banned, silenced_until").ilike("username", username).maybeSingle();
+    let profile = await sb.from("profiles").select("id, username, avatar_url, title, title_color, plan, xp, level, daily_streak, last_seen_at, shelf_saved_public, shelf_series_public, shelf_read_public, shelf_completed_public, shelf_liked_public, shelf_blogs_public, profile_hidden, is_banned, silenced_until").ilike("username", username).maybeSingle();
     if (profile.error) {
-      profile = await sb.from("profiles").select("id, username, avatar_url, title, plan").ilike("username", username).maybeSingle();
+      profile = await sb.from("profiles").select("id, username, avatar_url, title, plan, xp, level, daily_streak, last_seen_at").ilike("username", username).maybeSingle();
     }
     if (profile.error || !profile.data) {
       state.publicProfile = { error: "Perfil não encontrado.", username };
@@ -1149,6 +1193,8 @@
 
   async function signOut() {
     await sb?.auth.signOut();
+    if (state.presenceInterval) clearInterval(state.presenceInterval);
+    state.presenceInterval = null;
     state.notificationChannel?.unsubscribe?.();
     state.notificationChannel = null;
     clearLocalBox();
@@ -1399,6 +1445,7 @@
     } else {
       state.comicLikeIds.add(itemId);
       state.comicLikeCounts.set(itemId, (state.comicLikeCounts.get(itemId) || 0) + 1);
+      awardProfileXp("like", `like:${itemId}`);
     }
     updateComicLikeButtons(itemId);
   }
@@ -1735,7 +1782,7 @@
       button.disabled = true;
       const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
       if (result.error) toast(result.error.message);
-      else { awardAchievement("first_comment"); form.reset(); await refresh(); }
+      else { awardAchievement("first_comment"); awardProfileXp("comment", `comment:${item.id}:${Date.now()}`); form.reset(); await refresh(); }
       button.disabled = false;
     });
   }
@@ -1772,7 +1819,7 @@
       if (!state.session?.user?.id || !body) return;
       const button = $("button", form); button.disabled = true;
       const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
-      if (result.error) toast(result.error.message); else { form.reset(); await refresh(); }
+      if (result.error) toast(result.error.message); else { awardProfileXp("comment", `comment:${item.id}:${Date.now()}`); form.reset(); await refresh(); }
       button.disabled = false;
     });
   }
@@ -1798,7 +1845,7 @@
       if (!body) return;
       const button = $("button", form); button.disabled = true;
       const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, body });
-      if (result.error) toast(commentWriteError(result.error)); else { awardAchievement("first_comment"); form.reset(); await refresh(); }
+      if (result.error) toast(commentWriteError(result.error)); else { awardAchievement("first_comment"); awardProfileXp("comment", `comment:${item.id}:${Date.now()}`); form.reset(); await refresh(); }
       button.disabled = false;
     });
   }
@@ -1984,7 +2031,7 @@
       const parentId = Number(form.closest("[data-comment-id]")?.dataset.commentId);
       const button = $("button", form); button.disabled = true;
       const result = await sb.from("comments").insert({ user_id: state.session.user.id, item_id: item.id, parent_id: parentId, body });
-      if (result.error) toast(commentWriteError(result.error)); else { form.remove(); await refresh(); }
+      if (result.error) toast(commentWriteError(result.error)); else { awardProfileXp("comment", `comment:${item.id}:${Date.now()}`); form.remove(); await refresh(); }
       button.disabled = false;
     });
   }
@@ -4263,7 +4310,7 @@
       button.disabled = true;
       const result = await sb.from("chat_messages").insert({ sender_id: state.session.user.id, room_id: room.id, recipient_id: null, body, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
       if (result.error) { console.error("[chat room] erro ao enviar mensagem", result.error); toast(result.error.message || "Não foi possível enviar a mensagem."); }
-      else { composeForm.reset(); await renderMessages(); }
+      else { awardProfileXp("chat", `chat:${Date.now()}`); composeForm.reset(); await renderMessages(); }
       button.disabled = false;
     };
   }
@@ -4347,6 +4394,7 @@
         return toast(result.error.message || "Não foi possível enviar a mensagem.");
       }
       await renderMessages();
+      awardProfileXp("chat", `chat:${Date.now()}`);
       submitButton.disabled = false;
     };
   }
@@ -4458,6 +4506,15 @@
     if (result.error) return toast("Não foi possível atualizar o destaque da coleção.");
     if (state.section === "public-profile" && state.publicProfile?.profile) await loadPublicProfile(state.publicProfile.profile.username, state.publicProfile.collectionId || null);
     else await loadAccount();
+  }
+
+  function profileXpProgressMarkup(profile, compact = false) {
+    const xp = Math.max(0, Number(profile?.xp) || 0);
+    const level = Math.max(1, Number(profile?.level) || 1);
+    const currentFloor = Math.pow(level - 1, 2) * 100;
+    const nextFloor = Math.pow(level, 2) * 100;
+    const progress = Math.max(0, Math.min(100, ((xp - currentFloor) / Math.max(1, nextFloor - currentFloor)) * 100));
+    return `<div class="profile-xp-progress ${compact ? "is-compact" : ""}"><div class="profile-xp-head"><strong>Nível ${level}</strong><span>${xp.toLocaleString("pt-BR")} / ${nextFloor.toLocaleString("pt-BR")} XP para o nível ${level + 1}</span></div><div class="profile-xp-track"><span style="width:${progress.toFixed(2)}%"></span></div>${compact ? "" : `<small>${Math.max(0, nextFloor - xp).toLocaleString("pt-BR")} XP restantes · 🔥 ${Number(profile?.daily_streak || 0)} dia(s) de sequência</small>`}</div>`;
   }
 
   function renderShelfPage() {
@@ -4762,6 +4819,40 @@
     return ({ achievement: "🏆", moderation: "⚖", plan: "★", message: "✉", chat_mention: "@", follow: "♥", collection_like: "♥", comment_reply: "↩", comment_like: "♥", mention: "@", announcement: "!" }[type] || "•");
   }
 
+  function rankingMemberMarkup(member, showRank = false) {
+    const online = member.is_online === true;
+    const current = state.session?.user?.id === member.user_id;
+    const rank = showRank && member.ranking ? `<span class="ranking-position">${member.ranking}º</span>` : "";
+    const title = member.title ? `<span class="ranking-title" style="--title-bg:${safeTitleColor(member.title_color)}">${escapeHTML(member.title)}</span>` : "";
+    return `<a class="ranking-member ${current ? "is-current" : ""}" href="${escapeHTML(publicProfileHref(member.username))}">${rank}<span class="ranking-avatar-wrap ${online ? "is-online" : ""}">${avatarMarkup(member, "ranking-avatar")}<span class="ranking-online-dot" aria-label="Online"></span></span><span class="ranking-member-copy"><strong>@${escapeHTML(member.username)}</strong>${title}<small>Nível ${member.level} · ${Number(member.xp || 0).toLocaleString("pt-BR")} XP</small></span><span class="ranking-period-xp">+${Number(member.period_xp || 0).toLocaleString("pt-BR")} XP</span></a>`;
+  }
+
+  function rankingCategoryMembers(members, plan) {
+    return members.filter(member => plan === "staff" ? ["moderator", "admin"].includes(member.plan) : member.plan === plan)
+      .sort((a, b) => Number(b.level || 1) - Number(a.level || 1) || Number(b.xp || 0) - Number(a.xp || 0) || String(a.username).localeCompare(String(b.username), "pt-BR"));
+  }
+
+  function renderRankingCategoryPage(members) {
+    const labels = { staff: "Moderadores", premium: "Premium", free: "Free" };
+    const plan = labels[state.rankingCategory] ? state.rankingCategory : "free";
+    const group = rankingCategoryMembers(members, plan);
+    return `<div class="content ranking-page ranking-category-page"><div class="section-head"><div><div class="eyebrow">Diretório da comunidade</div><h1 class="section-title">Usuários ${labels[plan]}</h1><div class="section-subtitle">Todos os usuários desta categoria, ordenados por nível.</div></div><button class="small-btn" data-ranking-back>Voltar ao ranking</button></div><section class="section ranking-directory"><div class="ranking-member-list ranking-member-list-full">${group.map(member => rankingMemberMarkup(member, true)).join("") || '<div class="empty">Nenhum usuário nesta categoria.</div>'}</div></section></div>`;
+  }
+
+  function renderRankingPage() {
+    const members = state.rankingMembers || [];
+    if (state.rankingCategory) return renderRankingCategoryPage(members);
+    const eligibleMembers = members.filter(member => ["free", "premium"].includes(member.plan));
+    const periodLabels = { day: "24 horas", week: "7 dias", all: "Hall da fama" };
+    const topMembers = eligibleMembers.slice(0, 3);
+    const groups = [
+      ["staff", "Moderadores"],
+      ["premium", "Premium"],
+      ["free", "Free"]
+    ];
+    return `<div class="content ranking-page"><div class="section-head"><div><div class="eyebrow">Atividade da comunidade</div><h1 class="section-title">Ranking</h1><div class="section-subtitle">Ganhe XP lendo, participando e mantendo seu check-in diário.</div></div>${state.profile ? `<div class="ranking-self"><strong>Nível ${state.profile.level || 1}</strong><span>${Number(state.profile.xp || 0).toLocaleString("pt-BR")} XP · Check-in: 🔥 ${state.profile.daily_streak || 0} dia(s)</span></div>` : ""}</div><section class="section ranking-benefits"><div class="section-head"><div><h2 class="section-title">Vantagens por plano</h2><div class="section-subtitle">Todos podem ganhar XP; os planos liberam recursos diferentes.</div></div></div><div class="ranking-benefit-grid"><article class="ranking-benefit-card"><strong>Free</strong><p>Leitura do catálogo, check-in diário, XP e participação no ranking.</p></article><article class="ranking-benefit-card is-premium"><strong>Premium</strong><p>Todos os benefícios Free, capas variantes, estilos de capa e posição no ranking.</p></article><article class="ranking-benefit-card is-moderator"><strong>Moderador</strong><p>Recursos Premium, ferramentas de moderação, gestão da comunidade e destaque de coleções.</p></article></div></section><div class="ranking-tabs">${Object.entries(periodLabels).map(([period, label]) => `<button class="small-btn ${state.rankingPeriod === period ? "is-active" : ""}" data-ranking-period="${period}">${label}</button>`).join("")}</div>${state.rankingLoading ? '<div class="empty">Carregando ranking...</div>' : !eligibleMembers.length ? '<div class="empty">Ainda não há participantes Free ou Premium no ranking.</div>' : `<section class="section ranking-leaders"><div class="section-head"><div><h2 class="section-title">Membros mais ativos</h2><div class="section-subtitle">${periodLabels[state.rankingPeriod]} · moderadores e administradores não disputam posições.</div></div></div><div class="ranking-top-grid">${topMembers.map(member => `<div class="ranking-top-card"><span class="ranking-top-place">${member.ranking}º</span>${rankingMemberMarkup(member)}</div>`).join("")}</div></section>`}<section class="section ranking-directory"><div class="section-head"><div><h2 class="section-title">Todos os usuários</h2><div class="section-subtitle">Organizados por tipo de conta e com presença online.</div></div></div>${groups.map(([plan, label]) => { const group = plan === "staff" ? members.filter(member => ["moderator", "admin"].includes(member.plan)) : members.filter(member => member.plan === plan); return `<section class="ranking-group"><h3>${label}<span>${group.length}</span></h3><div class="ranking-member-list">${group.map(member => rankingMemberMarkup(member, true)).join("") || '<div class="empty">Nenhum usuário nesta categoria.</div>'}</div></section>`; }).join("")}</section></div>`;
+  }
+
   function renderNotifications() {
     if (!state.session) return renderLoginPage();
     return `<div class="content notifications-page"><div class="section-head"><div><div class="eyebrow">Central da conta</div><h1 class="section-title">Notificações</h1><div class="section-subtitle">${state.notificationUnreadCount} não lida(s)</div></div><button class="small-btn" data-mark-all-notifications>Marcar todas como lidas</button></div><div class="notification-list">${state.notifications.map(notification => { const actor = notification.actor; const actorName = actor?.username ? `@${escapeHTML(actor.username)}` : "A Banca Digital"; const actorMarkup = actor?.username ? `<a class="notification-actor" href="${escapeHTML(publicProfileHref(actor.username))}" data-notification-profile="${escapeHTML(actor.username)}">${avatarMarkup(actor, "notification-actor-avatar")}<span><b>${actorName}</b>${actor.title ? `<small style="--title-bg:${safeTitleColor(actor.title_color)}">${escapeHTML(actor.title)}</small>` : ""}</span></a>` : `<span class="notification-system-actor"><span class="notification-icon">${notificationIcon(notification.type)}</span><b>${actorName}</b></span>`; return `<div class="notification-item ${notification.read_at ? "" : "is-unread"}" role="button" tabindex="0" data-notification-open="${escapeHTML(notification.id)}"><span class="notification-icon">${notificationIcon(notification.type)}</span><span class="notification-copy">${actorMarkup}<strong>${escapeHTML(notification.title)}</strong><span>${escapeHTML(notification.body)}</span><small>${escapeHTML(formatCommentDate(notification.created_at))}</small></span></div>`; }).join("") || '<div class="empty">Você ainda não recebeu notificações.</div>'}</div></div>`;
@@ -4829,6 +4920,7 @@
     if (state.section === "home") markup = renderHome();
     else if (state.section === "comic") markup = renderCatalog("comic");
     else if (state.section === "blog") markup = renderBlogsPage();
+    else if (state.section === "ranking") markup = renderRankingPage();
     else if (state.section === "manga") markup = renderCatalog("manga");
     else if (state.section === "collections") markup = renderCollections();
     else if (state.section === "collection") markup = renderCollectionPage();
@@ -4863,6 +4955,7 @@
     syncActiveNav();
     render();
     if (section === "blog" && !state.blogPosts.length && !state.blogLoading) loadBlogPosts();
+    if (section === "ranking" && state.authReady) loadRankingData();
   }
 
   function openPublisherSettings(name) {
@@ -4899,6 +4992,48 @@
   function bind() {
     syncActiveNav();
     $(".content")?.classList.toggle("shelf-page", state.section === "shelf");
+    if (state.section === "ranking") {
+      const rankingPage = $(".ranking-page");
+      const benefits = $(".ranking-benefits", rankingPage);
+      if (rankingPage && benefits) rankingPage.appendChild(benefits);
+      if (rankingPage && !state.rankingCategory) {
+        const categoryByLabel = { Moderadores: "staff", Premium: "premium", Free: "free" };
+        $$(".ranking-group", rankingPage).forEach(groupElement => {
+          const list = $(".ranking-member-list", groupElement);
+          if (!list) return;
+          const cards = $$('a.ranking-member', list).sort((a, b) => {
+            const aNumbers = (($("small", a)?.textContent || "").match(/\d+/g) || []).map(Number);
+            const bNumbers = (($("small", b)?.textContent || "").match(/\d+/g) || []).map(Number);
+            return (bNumbers[0] || 1) - (aNumbers[0] || 1) || (bNumbers[1] || 0) - (aNumbers[1] || 0);
+          });
+          cards.forEach(card => list.appendChild(card));
+          list.classList.add("ranking-member-list-preview");
+          const category = categoryByLabel[$("h3", groupElement)?.firstChild?.textContent?.trim()];
+          if (category && cards.length && !$('[data-ranking-category]', groupElement)) list.insertAdjacentHTML("afterend", `<button class="small-btn ranking-view-all" data-ranking-category="${category}">Ver todos</button>`);
+        });
+      }
+      const directory = $(".ranking-directory", rankingPage);
+      if (directory) {
+        if (!$(".ranking-user-search", directory)) directory.insertAdjacentHTML("afterbegin", `<label class="ranking-user-search-wrap"><span>Pesquisar usuários</span><input class="ranking-user-search" type="search" value="${escapeHTML(state.rankingSearch || "")}" placeholder="Nome ou título..." autocomplete="off"></label>`);
+        const searchInput = $(".ranking-user-search", directory);
+        const applyRankingSearch = () => {
+          state.rankingSearch = searchInput.value;
+          const query = String(state.rankingSearch || "").trim().toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          $$("a.ranking-member", directory).forEach(card => {
+            const text = card.textContent.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            card.hidden = Boolean(query) && !text.includes(query);
+          });
+          $$(".ranking-group", directory).forEach(group => {
+            group.hidden = Boolean(query) && !$$('a.ranking-member:not([hidden])', group).length;
+          });
+        };
+        searchInput.addEventListener("input", applyRankingSearch);
+        applyRankingSearch();
+      }
+    }
+    if (state.section === "shelf" && state.profile && !$(".profile-xp-progress")) {
+      $(".content .profile-header")?.insertAdjacentHTML("afterend", profileXpProgressMarkup(state.profile));
+    }
     if (state.section === "shelf" && state.session) {
       const shelfHeading = $(".content > .section-head .section-title");
       if (shelfHeading) {
@@ -4915,6 +5050,7 @@
       $(".content").classList.toggle("shelf-show-blogs", state.shelfTab === "blogs");
     }
     if (state.section === "public-profile" && state.publicProfile?.profile && !state.publicProfile.collectionId) {
+      if (!$(".public-profile-page .profile-xp-progress") && $(".public-profile-page .profile-header")) $(".public-profile-page .profile-header").insertAdjacentHTML("afterend", profileXpProgressMarkup(state.publicProfile.profile, true));
       const publicSummary = $(".public-profile-page > .section-head .section-subtitle");
       if (publicSummary) publicSummary.innerHTML = followSummary(state.publicProfile.profile.id, state.publicProfile.followerCount, state.publicProfile.followingCount);
       const publicHead = $(".public-profile-page > .section-head");
@@ -4982,6 +5118,14 @@
       event.stopPropagation();
       openEntityPage(el.dataset.entityKind, el.dataset.entityValue);
     }));
+    $$('[data-ranking-period]').forEach(el => el.addEventListener("click", () => {
+      state.rankingPeriod = el.dataset.rankingPeriod;
+      state.rankingMembers = [];
+      render();
+      loadRankingData();
+    }));
+    $$('[data-ranking-category]').forEach(el => el.addEventListener("click", () => navigate({ pagina: "ranking", categoria: el.dataset.rankingCategory })));
+    $('[data-ranking-back]')?.addEventListener("click", () => navigate({ pagina: "ranking" }));
     $$('[data-follow-list]').forEach(el => el.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); openFollowList(el.dataset.followList, el.dataset.followProfileId); }));
     $$('[data-notification-open]').forEach(el => el.addEventListener("click", () => markNotificationRead(el.dataset.notificationOpen)));
     $('[data-mark-all-notifications]')?.addEventListener("click", markAllNotificationsRead);
