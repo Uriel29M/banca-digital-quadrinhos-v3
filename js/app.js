@@ -1251,6 +1251,7 @@
     overlay.innerHTML = `<div class="modal cover-choice-modal"><div class="section-head"><div><h2>Escolher capa</h2><div class="section-subtitle">${escapeHTML(itemDisplayTitle(item))}</div></div><button class="small-btn" data-close>Fechar</button></div><form id="cover-choice-form"><div class="cover-choice-options">${options.map(option => `<label class="cover-choice-option"><input type="radio" name="variantKey" value="${escapeHTML(option.variant_key)}" ${current?.variant_key === option.variant_key || (!current && option.variant_key === "__default") ? "checked" : ""}><img src="${escapeHTML(proxiedImageUrl(option.cover_url))}" alt=""><span>${escapeHTML(option.label)}</span></label>`).join("")}</div>${variants.length ? "" : '<div class="empty">Nenhuma capa variante foi cadastrada para esta edição.</div>'}<div class="modal-actions"><button type="button" class="small-btn" data-close>Cancelar</button><button class="btn btn-danger">Salvar capa</button></div></form></div>`;
     $("#modal-root").appendChild(overlay);
     $$('[data-close]', overlay).forEach(button => button.onclick = () => overlay.remove());
+    overlay.addEventListener("click", event => { if (event.target === overlay) overlay.remove(); });
     $("#cover-choice-form", overlay).onsubmit = async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
@@ -3988,7 +3989,7 @@
         likes: editions.reduce((total, edition) => total + (state.comicLikeCounts.get(edition.id) || 0), 0)
       }))
       .sort((a, b) => b.likes - a.likes || String(a.item.seriesTitle || a.item.title).localeCompare(String(b.item.seriesTitle || b.item.title), "pt-BR"))
-      .slice(0, 5);
+      .slice(0, 6);
     const bestSeriesRail = bestSeries.length ? `<section class="section best-series-section"><div class="section-head"><div><h2 class="section-title">Melhores séries</h2><div class="section-subtitle">As séries mais curtidas, pela soma das curtidas de suas edições.</div></div></div><div class="results-grid">${bestSeries.map(entry => seriesCard(entry.item)).join("")}</div></section>` : "";
 
     const publisherEntries = new Map();

@@ -278,6 +278,9 @@ main { min-height: calc(100vh - 150px); }
 .rail-viewport {
   width: min(100%, calc(6 * var(--media-card-width) + 75px));
   overflow: hidden;
+  padding: 8px 10px 0;
+  border-radius: 12px;
+  background: #111116;
 }
 .rail {
   display: grid;
@@ -864,7 +867,13 @@ main { min-height: calc(100vh - 150px); }
   width: min(760px, 100%); max-height: 90vh; overflow: auto;
   background: #111114; border: 1px solid #303037; border-radius: 14px;
   padding: 24px;
+  scrollbar-color: #74747d #111114;
+  scrollbar-width: auto;
 }
+.modal::-webkit-scrollbar, .modal *::-webkit-scrollbar { width: 12px; height: 12px; }
+.modal::-webkit-scrollbar-track, .modal *::-webkit-scrollbar-track { background: #111114; }
+.modal::-webkit-scrollbar-thumb, .modal *::-webkit-scrollbar-thumb { background: #74747d; border: 3px solid #111114; border-radius: 8px; }
+.modal::-webkit-scrollbar-thumb:hover, .modal *::-webkit-scrollbar-thumb:hover { background: #92929b; }
 .modal h2 { margin-top: 0; }
 .follow-list-modal { width: min(520px, 100%); }
 .follow-list { display: grid; gap: 8px; }
