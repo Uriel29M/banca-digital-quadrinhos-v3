@@ -219,6 +219,8 @@ create table if not exists public.shelf_collections (
 alter table public.shelf_collections add column if not exists collection_type text not null default 'comic';
 alter table public.shelf_collections add column if not exists blog_ids jsonb not null default '[]'::jsonb;
 alter table public.shelf_collections add column if not exists is_featured boolean not null default false;
+alter table public.shelf_collections add column if not exists cover_styles jsonb not null default '{}'::jsonb;
+alter table public.shelf_collections add column if not exists cover_choices jsonb not null default '{}'::jsonb;
 alter table public.shelf_collections drop constraint if exists shelf_collections_type_check;
 alter table public.shelf_collections add constraint shelf_collections_type_check check (collection_type in ('comic', 'blog'));
 
@@ -718,6 +720,7 @@ drop policy if exists "cover choices are public" on public.user_cover_choices;
 drop policy if exists "premium users manage own cover choices" on public.user_cover_choices;
 drop policy if exists "cover styles are public" on public.user_cover_styles;
 drop policy if exists "premium users manage own cover styles" on public.user_cover_styles;
+drop policy if exists "users manage own cover styles" on public.user_cover_styles;
 drop policy if exists "series cover choices are public" on public.user_series_cover_choices;
 drop policy if exists "users manage own series cover choices" on public.user_series_cover_choices;
 drop policy if exists "comic likes are public" on public.comic_likes;
